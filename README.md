@@ -124,8 +124,10 @@ Texto libre ──► Entrevista (IA) ──► Perfil de compra ──► Tiend
    decisiones técnicas se presentan con lo que cambian en la práctica y una recomendación ("Full HD,
    más barato · 2K, texto más nítido, ideal en 27""); lo demás, por el uso ("¿te molesta que haga
    ruido?", no "¿qué switches?"). Pregunta marca preferida y "¿algo que sí o sí quieras o no?". No
-   repite lo que ya dijiste. "No sé, explicame" explica y repite la pregunta. Al llegar al máximo, se
-   fuerza el perfil.
+   repite lo que ya dijiste, pero aunque el primer mensaje sea muy detallado hace al menos 3 preguntas
+   sobre lo que falte (si la IA cierra antes, se le pide una más). Todo lo que se pidió con números
+   (32 GB, 1 TB, Ryzen 7) va tal cual a "Tiene que tener". "No sé, explicame" explica y repite la
+   pregunta. Al llegar al máximo, se fuerza el perfil.
 2. **Perfil**: cada característica trae *qué es* (en una oración que entienda cualquiera) y *por qué
    para vos* (citando lo que respondiste). Incluye la categoría, búsquedas para las tiendas, modelos
    sugeridos y palabras a excluir (accesorios, repuestos).
@@ -141,8 +143,10 @@ Texto libre ──► Entrevista (IA) ──► Perfil de compra ──► Tiend
      tiene que tener su código, ej. "G502"), después el resto repartido entre las búsquedas amplias y
      por precio según el presupuesto (económico mira el 60 % más barato, alto el 60 % más caro).
      Los usados, outlet, exhibición y caja abierta se descartan (mismo criterio que el tracker).
-   - La IA evalúa cada publicación (¿es el producto?, puntaje, modelo normalizado), se agrupa por
-     modelo y se corta en **tres rangos por precio** (en proporción: dos modelos de precio parecido
+   - La IA evalúa cada publicación (¿es el producto?, puntaje, modelo normalizado con su código o con
+     la configuración que lo distingue, nunca "MSI Gamer") y lista qué obligatorios **contradice** el
+     título (pide Ryzen 7 y dice Ryzen 5): si contradice alguno, el código limita el puntaje a 40 (pasa
+     a "Casi cumplen", con "No cumple: ..."). Se agrupa por modelo y se corta en **tres rangos por precio** (en proporción: dos modelos de precio parecido
      caen juntos). "Mi recomendación" sale del rango que va con el presupuesto.
    - **Casi cumplen**: los que tienen puntaje 35-54, con lo que les falta.
 
@@ -161,6 +165,16 @@ navegador y viaja completa en cada pedido: el servidor no guarda estado.
 | Tiendanube | `/search/?q=` (HTML con `data-variants`) | Nickhard, Shopgamer, Dualkey |
 
 Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.json`.
+
+**Frávega (VTEX) tiene tres particularidades** (verificadas en su web el 25/11/2026):
+- El `Price` de su API viene **sin IVA** y el impuesto aparte en `Tax`: el precio real es la suma
+  (ej. $1.979.418 + $207.839 = $2.187.257, lo que muestra la web). Se suma `Tax` en todas las tiendas
+  VTEX (en las demás viene en 0).
+- Dejó VTEX para su web: el link de la API lleva a una página vacía. Las fichas son
+  `fravega.com/p/<nombre>-<número de artículo>/` (el `itemId`), y así se arma el link.
+- La API sigue mostrando con stock publicaciones que en la web dicen "no disponible para tu ubicación"
+  o que son "Compra Internacional" (importadas por vendedores del marketplace), y no hay forma de
+  distinguirlas en los datos.
 
 ## Lo que se trajo del tracker de monitores
 

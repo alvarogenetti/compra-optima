@@ -37,6 +37,10 @@ CÓMO ENTREVISTAR
   Bien: "¿Te molesta que haga ruido al hacer clic?". Mal: "¿Qué switches preferís?", "¿Cuántos DPI?".
 - Si tiene sentido en la categoría, preguntá también por marca preferida o a evitar (con la opción
   "Me da igual") y, antes de cerrar, "¿Hay algo que sí o sí quieras, o que no quieras?".
+- Si la persona ya escribió muchos detalles al principio, no los vuelvas a preguntar, pero igual
+  preguntá por los factores que faltan (uso principal, tamaño o portabilidad, marca, presupuesto si no lo
+  dio, "¿algo más que sí o sí?"): al menos 3 preguntas antes del perfil. Podés confirmar en "draft" lo
+  que ya dijo.
 - No preguntes lo que la persona ya dijo (ni lo que se deduce claramente). Si algo no aplica por lo que
   contó (curvo para alguien que sólo hace planillas), podés saltearlo, pero si hay duda, preguntá.
 - Ofrecé de 2 a 5 opciones cortas que cubran los casos comunes. La persona también puede escribir libre.
@@ -56,6 +60,9 @@ CUÁNDO TERMINAR
 Cuando ya sepas lo suficiente (o la persona pida ver resultados), devolvé el perfil (type "profile").
 
 EL PERFIL
+- Todo lo que la persona pidió EXPLÍCITAMENTE con números o nombres (RAM, almacenamiento, procesador,
+  placa de video, Hz, tamaño, marca) va en "must" tal cual lo pidió ("32 GB de RAM o más", "1 TB de
+  almacenamiento o más"): no lo resumas ni lo omitas.
 - "must": lo que SÍ o SÍ tiene que tener. "nice": lo deseable. "avoid_paying_for": cosas por las que
   NO conviene pagar extra para este uso (marketing, funciones que no va a usar).
 - Cada característica lleva:
@@ -95,6 +102,8 @@ o
 
 FORCE_PROFILE = ("(Mensaje del sistema: ya se hicieron todas las preguntas permitidas. "
                  "Devolvé ahora el perfil con lo que sabés.)")
+TOO_SOON = ("(Mensaje del sistema: todavía no armes el perfil. Hacé UNA pregunta sobre el factor de "
+            "decisión más importante que falte; no repitas lo que la persona ya dijo.)")
 WANTS_RESULTS = ("(Mensaje del sistema: la persona quiere ver resultados ya. "
                  "Devolvé el perfil con lo que sabés.)")
 
@@ -129,6 +138,10 @@ def step(conversation: list[dict], finish: bool = False) -> dict:
     if force:
         conv = conv + [{"role": "user", "content": WANTS_RESULTS if finish else FORCE_PROFILE}]
     out = normalize(get_ai().json(system_prompt(), conv, task="interview"))
+    if out["type"] == "profile" and not force and asked < settings.MIN_QUESTIONS:
+        # Cerró demasiado rápido (pasa cuando el primer mensaje es muy detallado): una pregunta más
+        out = normalize(get_ai().json(system_prompt(), conv + [{"role": "user", "content": TOO_SOON}],
+                                      task="interview"))
     if force and out["type"] != "profile":
         raise AIError("La IA no pudo armar el perfil. Probá de nuevo.")
     out["asked"] = asked + (1 if out["type"] == "question" else 0)

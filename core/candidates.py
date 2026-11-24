@@ -25,14 +25,24 @@ de ese modelo. Español rioplatense, simple, sin tecnicismos sin explicar.
 Para cada publicación que SEA el producto buscado (no accesorios, repuestos ni otra cosa) devolvé:
 - "id": el id de la lista.
 - "model": marca + modelo normalizado, igual para la misma cosa en distintas tiendas
-  ("Logitech G305", no "Mouse Gamer Logitech G305 Lightspeed Negro").
+  ("Logitech G305", no "Mouse Gamer Logitech G305 Lightspeed Negro"). Si el título trae un código de
+  modelo, usalo ("MSI Thin GF63 12VF", "HP Victus 15-fb2063dx"). Si no trae código, armalo con marca +
+  lo que distingue esa configuración, para no juntar productos distintos ("MSI Ryzen 5 RTX 4060 32GB
+  1TB", nunca "MSI Gamer").
 - "score": de 0 a 100, qué tan bien cumple el perfil (los "must" pesan mucho más que los "nice").
+  Si el título CONTRADICE un "must" (pide Ryzen 7 o superior y dice Ryzen 5; pide 32 GB y dice 16 GB;
+  pide IPS y dice VA), el puntaje no puede pasar de 40 y eso va en "doubts". Leé los números del
+  título con cuidado: comparalos uno por uno con cada "must" antes de puntuar.
+- "fails_must": la lista de requisitos "Obligatorio" que el título CONTRADICE (vacía si no contradice
+  ninguno). Contradecir es que el título diga otra cosa (pide 32 GB y dice 16 GB; pide Ryzen 7 o
+  superior y dice Ryzen 5), no que no lo mencione.
 - "meets": hasta 3 cosas del perfil que cumple, en palabras simples.
 - "doubts": hasta 2 cosas que no cumple o que no se pueden confirmar por el título.
 - "reason": una oración de por qué le sirve (o no) a esta persona.
 Las publicaciones que NO son el producto, omitilas.
 
-Respondé SÓLO JSON: {"items": [{"id": 0, "model": "", "score": 0, "meets": [], "doubts": [], "reason": ""}]}"""
+Respondé SÓLO JSON: {"items": [{"id": 0, "model": "", "score": 0, "fails_must": [], "meets": [], "doubts": [], "reason": ""}]}"""
+FAIL_CAP = 40   # si contradice un obligatorio, como mucho "casi cumple"
 
 TIERS = [
     ("economica", "Económica", "Lo más barato que cumple lo importante."),
@@ -149,10 +159,16 @@ def evaluate(listings: list[dict], profile: dict) -> list[dict]:
             continue
         if not 0 <= i < len(listings):
             continue
+        fails = [str(f)[:80] for f in (it.get("fails_must") or []) if str(f).strip()][:3]
+        doubts = [str(d)[:120] for d in (it.get("doubts") or [])][:2]
+        if fails:
+            # La IA a veces puntúa alto igual: el tope lo pone el código
+            score = min(score, FAIL_CAP)
+            doubts = [f"No cumple: {', '.join(fails)}"] + doubts[:1]
         out.append({**listings[i], "model": str(it.get("model") or listings[i]["title"]).strip()[:80],
                     "score": score,
                     "meets": [str(m)[:120] for m in (it.get("meets") or [])][:3],
-                    "doubts": [str(d)[:120] for d in (it.get("doubts") or [])][:2],
+                    "doubts": doubts,
                     "reason": str(it.get("reason") or "")[:300]})
     return out
 

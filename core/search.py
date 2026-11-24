@@ -64,22 +64,34 @@ def parse_vtex(products: list[dict], store: Store) -> list[dict]:
                     continue
                 if best and best["price"] <= price:
                     continue
+                # Algunas tiendas (Frávega) devuelven Price SIN IVA y el impuesto aparte en Tax:
+                # el precio que se paga es la suma (en las demás Tax viene en 0)
+                price = float(price) + float(o.get("Tax") or 0)
                 lst = o.get("ListPrice") if (o.get("ListPrice") or 0) > price else None
                 free = [i.get("NumberOfInstallments") or 0 for i in (o.get("Installments") or [])
                         if not i.get("InterestRate") and (i.get("NumberOfInstallments") or 0) > 1]
                 teasers = [t.get("Name") or t.get("name") for t in
                            (o.get("Teasers") or []) + (o.get("PromotionTeasers") or [])
                            if isinstance(t, dict)]
-                host_root = store.host.split("/")[0]
                 best = {"store": store.id, "store_name": store.name, "title": p.get("productName") or "",
                         "brand": p.get("brand") or "", "price": float(price),
                         "list": float(lst) if lst else None,
                         "cuotas": max(free) if free else None,
                         "promo": ", ".join(dict.fromkeys(t for t in teasers if t)) or None,
-                        "url": p.get("link") or f"https://{host_root}/{p.get('linkText', '')}/p"}
+                        "url": product_url(store, p, it)}
         if best:
             out.append(best)
     return out
+
+
+def product_url(store: Store, p: dict, item: dict) -> str:
+    """Link a la ficha. Frávega dejó VTEX para su web: sus fichas son /p/<nombre>-<número de artículo>/
+    y el link que da la API lleva a una página vacía."""
+    if store.id == "fravega" and item.get("itemId"):
+        slug = re.sub(r"[^a-z0-9]+", "-", _fold(p.get("productName") or "")).strip("-")
+        return f"https://www.fravega.com/p/{slug}-{item['itemId']}/"
+    host_root = store.host.split("/")[0]
+    return p.get("link") or f"https://{host_root}/{p.get('linkText', '')}/p"
 
 
 def search_vtex(client: httpx.Client, store: Store, query: str) -> list[dict]:

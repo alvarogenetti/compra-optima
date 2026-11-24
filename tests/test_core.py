@@ -436,3 +436,25 @@ def test_api_ml(monkeypatch):
     monkeypatch.setattr(comparaya, "find", lambda model, product, title="": {"found": True, "page_url": "u", "ml": [], "others": []})
     r = TestClient(app).post("/api/ml", json={"model": "Logitech G502 Lightspeed", "product": "Mouse"})
     assert r.status_code == 200 and r.json()["search_url"].endswith("/logitech-g502-lightspeed")
+
+
+def test_vtex_frávega_suma_iva_y_arma_el_link_de_su_web():
+    fravega = stores.Store(id="fravega", name="Frávega", platform="vtex", host="www.fravega.com", categories=())
+    prods = [{"productName": "HP Gamer Core I7 1355U 16GB RAM 1TB SSD Notebook 15,6 FHD Silver",
+              "link": "https://www.fravega.com/hp-gamer-990495101/p", "items": [{"itemId": "990249245", "sellers": [
+                  {"commertialOffer": {"Price": 1979418.1, "Tax": 207838.9, "ListPrice": 5557200,
+                                       "AvailableQuantity": 10}}]}]}]
+    [o] = search.parse_vtex(prods, fravega)
+    assert o["price"] == pytest.approx(2187257.0)
+    assert o["url"] == "https://www.fravega.com/p/hp-gamer-core-i7-1355u-16gb-ram-1tb-ssd-notebook-15-6-fhd-silver-990249245/"
+    [otra] = search.parse_vtex(prods, STORE)   # otras tiendas VTEX: el link de la API
+    assert otra["url"] == "https://www.fravega.com/hp-gamer-990495101/p"
+
+
+def test_si_contradice_un_obligatorio_el_puntaje_se_limita():
+    set_ai(FakeAI(evaluate={"items": [{"id": 0, "model": "MSI Ryzen 5 RTX 4060", "score": 90,
+                                       "fails_must": ["Ryzen 7 o superior"], "doubts": ["x"]}]}))
+    prof = interview.normalize_profile({"product": "Notebook", "category": "informatica",
+                                        "must": ["Ryzen 7 o superior"], "search_queries": ["notebook"]})
+    [e] = candidates.evaluate([_listing(0, "Notebook MSI Ryzen 5 RTX 4060", 2_000_000)], prof)
+    assert e["score"] == candidates.FAIL_CAP and e["doubts"][0] == "No cumple: Ryzen 7 o superior"
