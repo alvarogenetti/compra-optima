@@ -251,6 +251,7 @@ def test_find_completo_con_dobles(monkeypatch):
             stores=[{"id": "fravega", "name": "Frávega", "ok": True, "found": 2, "error": None}])
 
     monkeypatch.setattr(candidates, "search_all", fake_search)
+    monkeypatch.setattr(candidates.comparaya, "find", lambda *a, **k: {"found": False, "ml": [], "others": []})
     set_ai(FakeAI(evaluate={"items": [
         {"id": 0, "model": "Philips BHD350", "score": 88, "meets": ["Iónico"], "reason": "Cuida el pelo"},
         {"id": 1, "model": "Gama Tempo", "score": 40}, {"id": 7, "model": "fantasma", "score": 99}]}))
@@ -259,7 +260,8 @@ def test_find_completo_con_dobles(monkeypatch):
     out = candidates.find(prof)
     assert out["recommended"] == "Philips BHD350"
     assert out["counts"] == {"found": 2, "evaluated": 2, "matching": 1}
-    assert out["links"]["mercadolibre"][0]["url"].endswith("/secador-de-pelo")
+    assert out["links"]["mercadolibre"][0]["url"].endswith("/philips-bhd350")   # modelo primero
+    assert out["links"]["mercadolibre"][-1]["url"].endswith("/secador-de-pelo")
 
 
 # ------------------------------------------------------------------ versión publicada
@@ -433,7 +435,7 @@ def test_comparaya_direcciones_y_ofertas_exactas():
 def test_api_ml(monkeypatch):
     from core import comparaya
     monkeypatch.delenv("ACCESS_CODE", raising=False)
-    monkeypatch.setattr(comparaya, "find", lambda model, product, title="": {"found": True, "page_url": "u", "ml": [], "others": []})
+    monkeypatch.setattr(comparaya, "find", lambda model, product, title="", cpus=None: {"found": True, "page_url": "u", "ml": [], "others": []})
     r = TestClient(app).post("/api/ml", json={"model": "Logitech G502 Lightspeed", "product": "Mouse"})
     assert r.status_code == 200 and r.json()["search_url"].endswith("/logitech-g502-lightspeed")
 
@@ -458,3 +460,35 @@ def test_si_contradice_un_obligatorio_el_puntaje_se_limita():
                                         "must": ["Ryzen 7 o superior"], "search_queries": ["notebook"]})
     [e] = candidates.evaluate([_listing(0, "Notebook MSI Ryzen 5 RTX 4060", 2_000_000)], prof)
     assert e["score"] == candidates.FAIL_CAP and e["doubts"][0] == "No cumple: Ryzen 7 o superior"
+
+
+
+def test_comparaya_suma_mercadolibre_a_los_candidatos(monkeypatch):
+    seen = {}
+
+    def fake_find(model, product, title="", cpus=None):
+        seen[model] = title
+        return {"found": True, "others": [{"shop": "Max Tecno", "title": "Notebook Asus TUF Gaming A15 FA506NCQ",
+                                           "price": 2276958.0, "list": None, "url": "https://maxtecno/x", "intl": False}],
+                "ml": [{"shop": "Mercado Libre", "title": "Notebook Asus TUF Gaming A15 FA506NCQ",
+                        "price": 2784999.0, "list": None, "url": "https://ml/x", "intl": False}]}
+
+    monkeypatch.setattr(candidates.comparaya, "find", fake_find)
+    tienda = [_listing(1, "Notebook Asus TUF Gaming A15 FA506NCQ Ryzen 7 7435HS", 3000000)]
+    found, status = candidates.comparaya_listings(["ASUS TUF A15 FA506NCQ"], {"product": "Notebook", "budget": {}}, tienda)
+    assert seen["ASUS TUF A15 FA506NCQ"].startswith("Notebook Asus TUF Gaming A15")   # título para la dirección
+    assert [(x["store"], x["store_name"], x["price"]) for x in found] == [
+        ("mercadolibre", "Mercado Libre", 2784999.0), ("cy-maxtecno", "Max Tecno", 2276958.0)]
+    assert status["found"] == 2
+
+
+def test_comparaya_direcciones_de_notebooks():
+    from core import comparaya
+    cands = comparaya.slug_candidates("Notebook gamer", "ASUS TUF A15 FA506NCQ",
+                                      "Notebook Asus TUF Gaming A15 FA506NCQ-HN003 Ryzen 7 7435HS 16GB 1TB")
+    assert cands[0] == "notebook-asus-tuf-gaming-a15-ryzen-7-7435hs"
+    # Línea sin código + procesadores vistos en las tiendas
+    cands = comparaya.slug_candidates("Notebook", "Asus TUF Gaming A15", "Notebook Gamer Asus TUF A15 16GB",
+                                      ["ryzen-7-7435hs", "ryzen-7-7735hs"])
+    assert cands[:3] == ["notebook-asus-tuf-gaming-a15-ryzen-7-7435hs", "notebook-asus-tuf-gaming-a15-ryzen-7-7735hs",
+                         "notebook-asus-tuf-gaming-a15"]

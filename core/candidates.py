@@ -10,12 +10,16 @@
 """
 from __future__ import annotations
 
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 
-from core import settings, stores
+from core import comparaya, settings, stores
 from core.ai import AIError, get_ai
 from core.search import mercadolibre_url, search_all, store_search_url
+
+log = logging.getLogger("candidates")
 
 EVAL_SYSTEM = """Sos el asesor de compras de "Compra Óptima" (Argentina). Te paso el perfil de compra de una
 persona y una lista de publicaciones REALES de tiendas argentinas (id | título | precio | tienda).
@@ -35,7 +39,8 @@ Para cada publicación que SEA el producto buscado (no accesorios, repuestos ni 
   título con cuidado: comparalos uno por uno con cada "must" antes de puntuar.
 - "fails_must": la lista de requisitos "Obligatorio" que el título CONTRADICE (vacía si no contradice
   ninguno). Contradecir es que el título diga otra cosa (pide 32 GB y dice 16 GB; pide Ryzen 7 o
-  superior y dice Ryzen 5), no que no lo mencione.
+  superior y dice Ryzen 5), no que no lo mencione. Si en "doubts" vas a decir que NO llega a algo
+  obligatorio ("la RAM es de 16 GB", "tiene 512 GB"), entonces va en "fails_must", no sólo en "doubts".
 - "meets": hasta 3 cosas del perfil que cumple, en palabras simples.
 - "doubts": hasta 2 cosas que no cumple o que no se pueden confirmar por el título.
 - "reason": una oración de por qué le sirve (o no) a esta persona.
@@ -261,6 +266,46 @@ def near_misses(models: list[dict], n: int = 4) -> list[dict]:
     return sorted(near, key=lambda m: (-m["score"], m["best"]["price"]))[:n]
 
 
+CY_MODELS = 5    # modelos sugeridos que se buscan en ComparaYa por búsqueda
+CY_WORKERS = 3   # de a pocos: cada modelo prueba algunas direcciones con pausa
+
+
+def comparaya_listings(models: list[str], profile: dict, store_listings: list[dict]) -> tuple[list[dict], dict]:
+    """Ofertas de Mercado Libre (y de tiendas que no leemos) para los modelos sugeridos, vía las fichas
+    de ComparaYa. Para armar la dirección de la ficha se usa el título de una publicación de ese modelo
+    en nuestras tiendas, si la hay (las notebooks se nombran por línea + procesador)."""
+    def one(model: str) -> list[dict]:
+        titles = [x["title"] for x in store_listings if query_match(x, model) >= 0.6]
+        # Procesadores que aparecen en esa línea (los más vistos primero): ComparaYa tiene una ficha por cada uno
+        seen_cpus = [c for c in (comparaya.cpu_of(x) for x in titles) if c]
+        cpus = sorted(set(seen_cpus), key=lambda c: -seen_cpus.count(c))[:3]
+        try:
+            r = comparaya.find(model, profile.get("product", ""), titles[0] if titles else "", cpus=cpus)
+        except Exception as e:  # noqa: BLE001 — ComparaYa caído no corta la búsqueda
+            log.info("ComparaYa %s: %s", model, e)
+            return []
+        out = []
+        for o in r.get("ml", []) + r.get("others", []):
+            ml = comparaya.is_ml(o)
+            shop = "Mercado Libre" if ml else o["shop"]
+            out.append({"store": "mercadolibre" if ml else "cy-" + re.sub(r"[^a-z0-9]", "", _fold(shop))[:30],
+                        "store_name": shop + (" · importado" if o.get("intl") else ""),
+                        "title": o["title"] + (" (importado)" if o.get("intl") else ""),
+                        "price": o["price"], "list": o.get("list"), "cuotas": None,
+                        "promo": "vía ComparaYa", "url": o["url"], "query": model})
+        return out
+
+    found: list[dict] = []
+    with ThreadPoolExecutor(max_workers=CY_WORKERS) as ex:
+        for items in ex.map(one, models[:CY_MODELS]):
+            found += items
+    cap = profile.get("budget", {}).get("max_ars")
+    found = [x for x in found if not cap or x["price"] <= cap * 1.3]
+    status = {"id": "comparaya", "name": "Mercado Libre y otras (vía ComparaYa)", "ok": True,
+              "found": len(found), "error": None}
+    return found, status
+
+
 def find(profile: dict) -> dict:
     reg = stores.load()
     shops = reg.for_categories([profile["category"]])
@@ -269,7 +314,11 @@ def find(profile: dict) -> dict:
     broad = profile["search_queries"]
     models_q = [m for m in profile.get("suggested_models", []) if m.lower() not in {q.lower() for q in broad}]
     report = search_all(shops, broad + models_q, profile.get("exclude_words"))
+    via_cy, cy_status = comparaya_listings(models_q, profile, report.listings)
     pool = prefilter(report.listings, profile, broad, models_q)
+    # Las de ComparaYa (Mercado Libre y tiendas que no leemos) se evalúan siempre
+    pool = via_cy + pool[:max(0, settings.MAX_LISTINGS_TO_EVALUATE - len(via_cy))]
+    report.stores.append(cy_status)
     evaluated = evaluate(pool, profile)
     budget = profile.get("budget", {})
     models = group_by_model(evaluated, budget.get("max_ars"))
@@ -283,7 +332,9 @@ def find(profile: dict) -> dict:
         "counts": {"found": len(report.listings), "evaluated": len(pool),
                    "matching": sum(1 for m in models if m["score"] >= MIN_SCORE)},
         "links": {
-            "mercadolibre": [{"query": q, "url": mercadolibre_url(q)} for q in broad + models_q[:3]],
+            # Mercado Libre devuelve poco con búsquedas amplias ("notebook gamer 32gb"): primero los
+            # modelos (marca + modelo corto) y después una búsqueda amplia
+            "mercadolibre": [{"query": q, "url": mercadolibre_url(q)} for q in (models_q[:4] + broad[:1])],
             "stores": [{"name": s.name, "url": store_search_url(s, main_q)} for s in shops],
         },
     }

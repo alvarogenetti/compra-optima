@@ -26,7 +26,7 @@ log = logging.getLogger("comparaya")
 BASE = "https://comparaya.net/p/"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 PAUSE_S = 1.2
-MAX_TRIES = 6
+MAX_TRIES = 8
 FOUND_TTL_DAYS = 30
 MISSING_TTL_DAYS = 7
 
@@ -45,7 +45,7 @@ def _has_digit(w: str) -> bool:
     return any(ch.isdigit() for ch in w)
 
 
-def slug_candidates(product: str, model: str, title: str = "") -> list[str]:
+def slug_candidates(product: str, model: str, title: str = "", cpus: list[str] | None = None) -> list[str]:
     """Direcciones posibles de la ficha. product = "Monitor para oficina" → tipo "monitor"."""
     kind = (_words(product) or ["producto"])[0]
     words = _words(model)
@@ -61,12 +61,60 @@ def slug_candidates(product: str, model: str, title: str = "") -> list[str]:
     if codes:
         bodies.append(codes[0])
     out: list[str] = []
+    if kind in COMPUTER_KINDS:
+        # Notebooks y PCs: ComparaYa las nombra por línea + procesador, no por código
+        # (notebook-asus-tuf-gaming-a15-ryzen-7-7435hs), así que se arman desde el título
+        out += computer_slugs(kind, brand, title or model, cpus or [], model)
     for b in dict.fromkeys(bodies):
         base = f"{kind}-{brand}-{b}"
         if size:
             out.append(f"{base}-{size}")
         out.append(base)
     return list(dict.fromkeys(out))[:MAX_TRIES]
+
+
+COMPUTER_KINDS = {"notebook", "laptop", "netbook", "pc", "computadora", "desktop", "ultrabook"}
+CPU_RE = re.compile(r"\b(ryzen \d \d{4}[a-z]{0,3}|core ultra \d \d{3}[a-z]{0,2}|core i\d \d{4,5}[a-z]{0,2}|"
+                    r"i\d \d{4,5}[a-z]{0,2}|core \d \d{3}[a-z]{0,2}|celeron [a-z]?\d{4}[a-z]?|m\d (?:pro|max)?)\b")
+LINE_STOP = {"notebook", "laptop", "gamer", "ryzen", "core", "intel", "amd", "rtx", "gtx",
+             "nvidia", "geforce", "radeon", "ram", "ssd", "hdd", "fhd", "qhd", "uhd", "oled", "ips", "win",
+             "windows", "w11", "con", "de", "y", "color", "negro", "gris", "plata", "silver", "black"}
+
+
+def _is_code(w: str) -> bool:
+    """Código de modelo largo (FA506NCQ, 15-fb2063dx): letras y números, 5 o más caracteres."""
+    return len(w) >= 5 and _has_digit(w) and any(ch.isalpha() for ch in w)
+
+
+def _line(text: str, brand: str) -> list[str]:
+    """Palabras de la línea después de la marca, hasta un código, el procesador o una especificación."""
+    words = re.sub(r"[^a-z0-9]+", " ", _fold(text)).split()
+    if brand not in words:
+        return []
+    line = []
+    for w in words[words.index(brand) + 1:]:
+        if w in LINE_STOP or _is_code(w) or re.fullmatch(r"\d+(gb|tb|hz|w)", w) or len(line) >= 4:
+            break
+        line.append(w)
+    return line
+
+
+def cpu_of(text: str) -> str | None:
+    m = CPU_RE.search(re.sub(r"[^a-z0-9]+", " ", _fold(text)))
+    return m.group(1).replace(" ", "-") if m else None
+
+
+def computer_slugs(kind: str, brand: str, title: str, cpus: list[str], model: str = "") -> list[str]:
+    """La línea sale del nombre del modelo ("TUF Gaming A15") y/o del título; el procesador, del título o
+    de los que se vieron en publicaciones de esa línea (ComparaYa tiene una ficha por procesador)."""
+    # Primero la línea más completa ("tuf gaming a15" antes que "tuf a15"): ComparaYa usa el nombre largo
+    lines = sorted((l for l in (_line(model, brand), _line(title, brand)) if l), key=len, reverse=True)
+    cpu_list = list(dict.fromkeys([c for c in [cpu_of(title)] + list(cpus) if c]))[:3]
+    out = []
+    for line in dict.fromkeys("-".join(l) for l in lines):
+        base = f"{kind}-{brand}-{line}"
+        out += [f"{base}-{c}" for c in cpu_list] + [base]
+    return out
 
 
 def _txt(s: str) -> str:
@@ -163,11 +211,15 @@ def _aware(t):
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
+SLUG_VERSION = "v3"   # subirlo cuando cambia cómo se arman las direcciones: invalida los "no existe" viejos
+
+
 def _key(model: str) -> str:
-    return "".join(_words(model))[:120]
+    return f"{SLUG_VERSION}:" + "".join(_words(model))[:110]
 
 
-def find(model: str, product: str, title: str = "", client: httpx.Client | None = None) -> dict:
+def find(model: str, product: str, title: str = "", client: httpx.Client | None = None,
+         cpus: list[str] | None = None) -> dict:
     """Busca la ficha del modelo. Devuelve {found, page_url, ml: [...], others: [...]}."""
     key = _key(model)
     known, slug = _cache_get(key)
@@ -183,7 +235,7 @@ def find(model: str, product: str, title: str = "", client: httpx.Client | None 
                 known = False   # la ficha ya no está: se vuelve a buscar
         if not known:
             slug = None
-            for i, cand in enumerate(slug_candidates(product, model, title)):
+            for i, cand in enumerate(slug_candidates(product, model, title, cpus)):
                 if i:
                     time.sleep(PAUSE_S)
                 r = c.get(BASE + cand)

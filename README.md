@@ -188,9 +188,17 @@ Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.js
   `/api/`, su buscador, así que no se usa). La ficha se encuentra armando la dirección con tipo, marca y
   código (`monitor-msi-mp241-24`, `mouse-logitech-g502-lightspeed`): se prueban hasta 6 variantes con
   1,2 s de pausa y la encontrada (o "no existe") se recuerda 30/7 días en la tabla `comparaya_slugs`.
-  Sólo cuentan ofertas nuevas con todas las palabras del modelo salvo la marca. Se usa en el botón
-  **"¿Y en Mercado Libre?"** de cada resultado (muestra ML y tiendas que no leemos) y en el escaneo de
-  Seguir precio (ML sin importados entra como una tienda más). Precialo no se usa: prohíbe leer su
+  Sólo cuentan ofertas nuevas con todas las palabras del modelo salvo la marca. Las **notebooks y PCs**
+  las nombra por línea + procesador (`notebook-asus-tuf-gaming-a15-ryzen-7-7435hs`, una ficha por
+  procesador): la línea sale del nombre del modelo o del título, y se prueban los procesadores que
+  aparecen en publicaciones de esa línea en nuestras tiendas. La caché tiene versión (`SLUG_VERSION`):
+  al mejorar cómo se arman las direcciones, los "no existe" viejos dejan de contar. Se usa:
+  - en **cada búsqueda**: los primeros 5 modelos sugeridos se buscan en ComparaYa (de a 3 en paralelo)
+    y sus ofertas (ML y tiendas que no leemos) entran a la evaluación como cualquier publicación;
+  - en el botón **"¿Y en Mercado Libre?"** de cada resultado;
+  - en el escaneo de Seguir precio (ML sin importados entra como una tienda más).
+  Los links "Mirá también en Mercado Libre" son de marca + modelo (las búsquedas amplias en ML no
+  devuelven nada). Precialo no se usa: prohíbe leer su
   buscador.
 - Para la etapa de seguimiento se pueden traer la oferta real contra la mediana de 30 días
   (`services/market.py`), los eventos con referencias congeladas y las cuotas en pesos de hoy.
