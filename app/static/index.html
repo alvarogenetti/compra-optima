@@ -20,6 +20,18 @@
   </header>
 
   <main>
+    <!-- 0. Código de acceso (sólo en la versión publicada) -->
+    <section id="view-code" class="view" hidden>
+      <form id="code-form" class="code-card">
+        <h1>Prueba privada</h1>
+        <p>Compra Óptima está en prueba con amigos y familia. Ingresá el código que te pasaron.</p>
+        <label for="code-input" class="sr-only">Código de acceso</label>
+        <input id="code-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Código">
+        <button type="submit" class="btn btn-primary">Entrar</button>
+        <p class="code-error" id="code-error" hidden></p>
+      </form>
+    </section>
+
     <!-- 1. Inicio -->
     <section id="view-home" class="view">
       <div class="hero">

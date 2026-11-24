@@ -261,8 +261,41 @@ def test_find_completo_con_dobles(monkeypatch):
     assert out["links"]["mercadolibre"][0]["url"].endswith("/secador-de-pelo")
 
 
+# ------------------------------------------------------------------ versión publicada
+def test_codigo_de_acceso_y_limite(monkeypatch):
+    from core import guard
+    monkeypatch.setenv("ACCESS_CODE", "mate")
+    monkeypatch.setattr(settings, "LIMIT_INTERVIEW_PER_HOUR", 2)
+    monkeypatch.setattr(guard, "limiter", guard.RateLimiter())
+    set_ai(DemoAI())
+    c = TestClient(app)
+    body = {"conversation": [{"role": "user", "content": "un mouse"}]}
+    assert c.get("/api/status").json()["code_required"] is True
+    r = c.post("/api/interview", json=body)
+    assert r.status_code == 401 and r.json()["code_required"]
+    assert c.post("/api/check-code", headers={"X-Access-Code": "otro"}).status_code == 401
+    assert c.post("/api/check-code", headers={"X-Access-Code": "mate"}).status_code == 200
+    ok = {"X-Access-Code": "mate", "X-Forwarded-For": "1.2.3.4, 10.0.0.1"}
+    assert c.post("/api/interview", json=body, headers=ok).status_code == 200
+    assert c.post("/api/interview", json=body, headers=ok).status_code == 200
+    r = c.post("/api/interview", json=body, headers=ok)
+    assert r.status_code == 429 and "límite" in r.json()["error"]
+    # Otra persona (otra IP) tiene su propio cupo
+    assert c.post("/api/interview", json=body, headers={**ok, "X-Forwarded-For": "5.6.7.8"}).status_code == 200
+
+
+def test_rate_limiter_libera_con_el_tiempo():
+    from core.guard import Denied, RateLimiter
+    rl = RateLimiter(window_s=60)
+    rl.hit("a", "x", 1, now=0)
+    with pytest.raises(Denied):
+        rl.hit("a", "x", 1, now=30)
+    rl.hit("a", "x", 1, now=61)
+
+
 # ------------------------------------------------------------------ API
-def test_api_entrevista_y_errores():
+def test_api_entrevista_y_errores(monkeypatch):
+    monkeypatch.delenv("ACCESS_CODE", raising=False)
     set_ai(DemoAI())
     c = TestClient(app)
     assert c.get("/api/status").json()["stores"] == len(stores.load().stores)

@@ -1,0 +1,20 @@
+# Despliegue en Render (plan gratis). Ver "Publicar la página" en el README.
+services:
+  - type: web
+    name: compra-optima
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/status
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false        # se carga a mano en Render (no va al repo)
+      - key: ACCESS_CODE
+        sync: false        # el código que les pasás a amigos y familia

@@ -21,17 +21,36 @@ function toast(msg) {
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 7000);
 }
 
-async function api(path, body) {
-  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+const CODE_KEY = "compra-optima:code";
+function getCode() { try { return localStorage.getItem(CODE_KEY) || ""; } catch (_) { return ""; } }
+function setCode(c) { try { if (c) localStorage.setItem(CODE_KEY, c); else localStorage.removeItem(CODE_KEY); } catch (_) { /* nada */ } }
+
+async function api(path, body, code = getCode()) {
+  const headers = { "Content-Type": "application/json" };
+  if (code) headers["X-Access-Code"] = code;
+  const r = await fetch(path, body !== undefined ? { method: "POST", headers, body: JSON.stringify(body) } : { headers });
   let data = null;
   try { data = await r.json(); } catch (_) { /* respuesta vacía */ }
+  if (r.status === 401 && data && data.code_required && path !== "/api/check-code") {
+    setCode("");
+    showCode();
+  }
   if (!r.ok) throw new Error((data && (data.error || (data.detail && JSON.stringify(data.detail)))) || `Error ${r.status}`);
   return data;
 }
 
+let viewAfterCode = "home";
+function showCode() {
+  if (state.view !== "code") viewAfterCode = state.view || "home";
+  for (const v of ["code", "home", "chat", "profile", "results"]) $(`#view-${v}`).hidden = v !== "code";
+  state.view = "code";
+  $("#restart-btn").hidden = true;
+  setTimeout(() => $("#code-input").focus(), 50);
+}
+
 function show(view) {
   state.view = view;
-  for (const v of ["home", "chat", "profile", "results"]) $(`#view-${v}`).hidden = v !== view;
+  for (const v of ["code", "home", "chat", "profile", "results"]) $(`#view-${v}`).hidden = v !== view;
   $("#restart-btn").hidden = view === "home";
   save();
   window.scrollTo({ top: 0 });
@@ -291,6 +310,21 @@ function renderResults() {
 }
 
 /* ---------------- Eventos ---------------- */
+$("#code-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const code = $("#code-input").value.trim();
+  const err = $("#code-error");
+  err.hidden = true;
+  if (!code) return;
+  try {
+    await api("/api/check-code", {}, code);
+    setCode(code);
+    $("#code-input").value = "";
+    restoreView(viewAfterCode);
+  } catch (ex) {
+    err.textContent = ex.message; err.hidden = false;
+  }
+});
 $("#start-form").addEventListener("submit", (e) => { e.preventDefault(); start($("#start-input").value); });
 $("#start-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); start($("#start-input").value); }
@@ -321,8 +355,13 @@ $("#brand-link").addEventListener("click", (e) => { e.preventDefault(); show("ho
     if (status.provider === "demo") { badge.textContent = "Modo demo (sin IA)"; badge.classList.add("warn"); }
     else badge.textContent = `IA: ${status.provider}`;
   } catch (_) { /* el servidor responde igual más tarde */ }
-  if (state.view === "chat" && state.conversation.length) { show("chat"); renderThread(); }
-  else if (state.view === "profile" && state.profile) { renderProfile(); show("profile"); }
-  else if (state.view === "results" && state.results) { renderProfile(); renderResults(); show("results"); }
-  else show("home");
+  if (status.code_required && !getCode()) { viewAfterCode = state.view; showCode(); return; }
+  restoreView(state.view);
 })();
+
+function restoreView(view) {
+  if (view === "chat" && state.conversation.length) { show("chat"); renderThread(); }
+  else if (view === "profile" && state.profile) { renderProfile(); show("profile"); }
+  else if (view === "results" && state.results) { renderProfile(); renderResults(); show("results"); }
+  else show("home");
+}

@@ -28,6 +28,16 @@ def gemini_model() -> str:
     return (os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview,gemini-flash-lite-latest,gemini-flash-latest").strip()
 
 
-MAX_QUESTIONS = 8          # la entrevista no pasa de esto: con más, la gente abandona
+def access_code() -> str:
+    """Si está definido, la web pide este código antes de usar la IA (para la versión publicada:
+    así nadie de afuera gasta el cupo gratis de Gemini). Vacío = sin código (uso local)."""
+    return (os.getenv("ACCESS_CODE") or "").strip()
+
+
+# Límites por persona (IP) y por hora, para la versión publicada
+LIMIT_INTERVIEW_PER_HOUR = int(os.getenv("LIMIT_INTERVIEW_PER_HOUR") or 80)
+LIMIT_SEARCH_PER_HOUR = int(os.getenv("LIMIT_SEARCH_PER_HOUR") or 12)
+
+MAX_QUESTIONS = 8         # la entrevista no pasa de esto: con más, la gente abandona
 SEARCH_TIMEOUT_S = 20      # por tienda
 MAX_LISTINGS_TO_EVALUATE = 80

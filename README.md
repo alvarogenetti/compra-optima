@@ -34,6 +34,27 @@ El plan gratis de Gemini tiene límites por minuto y por día, y Google puede us
 para mejorar sus modelos. Para una prueba chica alcanza; antes de abrirlo a más gente, conviene
 pasar a un plan pago.
 
+## Publicar la página (Render, gratis)
+
+GitHub Pages no sirve: sólo publica archivos estáticos, y esta app necesita un servidor (Python, la
+clave de Gemini y las búsquedas en tiendas). Render tiene un plan gratis que alcanza para la prueba.
+
+1. Creá una cuenta en https://render.com (con tu GitHub es lo más fácil).
+2. **New → Blueprint** y elegí el repo `compra-optima`. Render lee `render.yaml` y arma el servicio.
+3. Te pide dos valores que no van al repo:
+   - `GEMINI_API_KEY`: tu clave de AI Studio.
+   - `ACCESS_CODE`: un código cualquiera (ej. `milanesa2026`) que les pasás a amigos y familia.
+4. Listo: queda en `https://compra-optima.onrender.com` (o parecido). Cada push a `main` se publica solo.
+
+**Protección de la versión publicada** (`core/guard.py`): con `ACCESS_CODE` definido, la web pide el
+código antes de usar la IA, y cada persona (IP) tiene un límite por hora (80 turnos de entrevista y 12
+búsquedas; se cambian con `LIMIT_INTERVIEW_PER_HOUR` / `LIMIT_SEARCH_PER_HOUR`). Así nadie de afuera
+te gasta el cupo gratis de Gemini. En tu PC, sin `ACCESS_CODE`, no pide nada.
+
+**Limitaciones del plan gratis:** el servidor se duerme después de 15 minutos sin uso y la primera
+visita tarda alrededor de un minuto en despertarlo. Frávega bloquea a los servidores en la nube, así
+que es probable que ahí no responda (en "Dónde buscamos" aparece como error; el resto sigue).
+
 ## Cómo funciona
 
 ```
