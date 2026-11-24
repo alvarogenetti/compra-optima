@@ -276,16 +276,48 @@ function card(c, recommended) {
     <ul class="checks">${(c.meets || []).map((m) => `<li>${esc(m)}</li>`).join("")}${(c.doubts || []).map((d) => `<li class="doubt">${esc(d)}</li>`).join("")}</ul>
     <div class="actions">
       <a class="btn btn-primary" href="${esc(best.url)}" target="_blank" rel="noopener">Ver en ${esc(best.store_name)}</a>
-      <button class="btn" disabled title="Próximamente: te avisamos cuando baje de verdad">Seguir precio</button>
+      ${status.follow_enabled
+        ? `<button class="btn follow-btn" data-follow="${cardModels.push(c) - 1}" title="Te avisamos por Telegram cuando baje de verdad">🔔 Seguir precio</button>`
+        : `<button class="btn" disabled title="Próximamente: te avisamos cuando baje de verdad">Seguir precio</button>`}
     </div>
+    <div class="follow-note" hidden></div>
     ${others.length ? `<details class="others"><summary>También en ${others.length} tienda${others.length > 1 ? "s" : ""} más</summary>
       <ul>${others.map((o) => `<li><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.store_name)}</a><span>${money.format(o.price)}</span></li>`).join("")}</ul></details>` : ""}
   </article>`;
 }
 
+/* ---------------- Seguir precio ---------------- */
+let cardModels = [];
+
+function bindFollow() {
+  for (const b of document.querySelectorAll(".follow-btn")) {
+    b.addEventListener("click", async () => {
+      const c = cardModels[Number(b.dataset.follow)];
+      const note = b.closest(".card").querySelector(".follow-note");
+      b.disabled = true; b.textContent = "Preparando…";
+      try {
+        const out = await api("/api/follow", {
+          model: c.model, category: state.profile.category, product: state.profile.product,
+          best: { price: c.best.price, store_name: c.best.store_name, url: c.best.url },
+        });
+        const a = document.createElement("a");
+        a.className = "btn btn-primary"; a.href = out.link; a.target = "_blank"; a.rel = "noopener";
+        a.textContent = "Abrir Telegram";
+        b.replaceWith(a);
+        note.hidden = false;
+        note.innerHTML = `En Telegram tocá <b>Iniciar</b> y listo. Te escribimos cuando ${esc(c.model)} esté al menos 15 % más barato que su precio habitual (no contra el "precio de lista" inflado).`;
+      } catch (e) {
+        toast(e.message);
+        b.disabled = false; b.textContent = "🔔 Seguir precio";
+      }
+    });
+  }
+}
+
 function renderResults() {
   const r = state.results;
   if (!r) return;
+  cardModels = [];
   const ok = r.stores.filter((s) => s.ok).length;
   const ml = `<section class="panel"><h2>Mirá también en Mercado Libre</h2>
       <p>Mercado Libre no permite que programas lean sus precios, así que no lo incluimos en la comparación. Te dejamos la búsqueda armada para que lo mires vos.</p>
@@ -303,6 +335,7 @@ function renderResults() {
       <p><button class="btn" id="back-profile">Volver al perfil</button></p></div>${near}${ml}${fb}${storeStatus}`;
     $("#back-profile").addEventListener("click", () => show("profile"));
     bindFeedback();
+    bindFollow();
     return;
   }
   $("#results").innerHTML = `<div class="results-head"><h1>${esc(state.profile.product)}: tus opciones</h1>
@@ -314,6 +347,7 @@ function renderResults() {
     ${near}${ml}${fb}${storeStatus}`;
   $("#back-profile").addEventListener("click", () => show("profile"));
   bindFeedback();
+  bindFollow();
 }
 
 /* ---------------- ¿Te sirvió? ---------------- */

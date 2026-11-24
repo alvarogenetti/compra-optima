@@ -1,26 +1,50 @@
-"""Servidor web: la página y tres endpoints.
+"""Servidor web: la página y la API.
 
-  GET  /api/status       proveedor de IA, tiendas y categorías
-  POST /api/interview    un turno de la entrevista  {conversation: [...], finish: bool}
-  POST /api/candidates   busca y evalúa candidatos  {profile: {...}}
+  GET  /api/status            proveedor de IA, tiendas, categorías y si se puede seguir precios
+  POST /api/interview         un turno de la entrevista  {conversation: [...], finish: bool}
+  POST /api/candidates        busca y evalúa candidatos  {profile: {...}}
+  POST /api/follow            "Seguir precio": crea el seguimiento y devuelve el link de Telegram
+  POST /api/telegram/<clave>  webhook del bot (lo llama Telegram)
+  POST /api/feedback          "¿Te sirvió?"
 """
 from __future__ import annotations
 
 import logging
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core import candidates, feedback, guard, interview, settings, stores
+from core import candidates, db, feedback, follow, guard, interview, settings, stores, telegram
 from core.ai import AIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("app")
 STATIC = Path(__file__).parent / "static"
 
-app = FastAPI(title="Compra Óptima")
+
+def follow_enabled() -> bool:
+    return telegram.enabled() and db.is_configured()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # En Render: registrar el webhook del bot en la dirección pública (RENDER_EXTERNAL_URL)
+    base = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_URL")
+    if base and telegram.enabled():
+        try:
+            await run_in_threadpool(telegram.set_webhook, base)
+        except Exception as e:  # noqa: BLE001 — sin webhook la web igual anda
+            log.warning("No se pudo registrar el webhook de Telegram: %s", e)
+    yield
+
+
+app = FastAPI(title="Compra Óptima", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -78,6 +102,7 @@ def status():
             "model": settings.gemini_model().split(",")[0] if provider == "gemini" else None,
             "stores": len(reg.stores),
             "code_required": bool(settings.access_code()),
+            "follow_enabled": follow_enabled(),
             "categories": {k: v["label"] for k, v in reg.categories.items()}}
 
 
@@ -97,6 +122,43 @@ def do_interview(body: InterviewIn, request: Request):
 def do_candidates(body: CandidatesIn, request: Request):
     protect(request, "search", settings.LIMIT_SEARCH_PER_HOUR)
     return candidates.find(interview.normalize_profile(body.profile))
+
+
+class Offer(BaseModel):
+    price: float = Field(gt=0)
+    store_name: str = Field(default="", max_length=80)
+    url: str = Field(default="", max_length=1000)
+
+
+class FollowIn(BaseModel):
+    model: str = Field(min_length=2, max_length=120)
+    category: str = Field(max_length=40)
+    product: str = Field(default="", max_length=120)
+    best: Offer
+
+
+@app.post("/api/follow")
+def do_follow(body: FollowIn, request: Request):
+    protect(request, "follow", 30)
+    if not follow_enabled():
+        raise AIError("Seguir precios todavía no está activado en esta versión.")
+    if body.category not in stores.load().categories:
+        raise AIError("Categoría desconocida.")
+    tok = follow.create(body.model, body.category, body.product, body.best.model_dump())
+    return {"link": telegram.deep_link(tok)}
+
+
+@app.post("/api/telegram/{secret}")
+async def telegram_webhook(secret: str, request: Request):
+    import hmac
+    if not telegram.enabled() or not hmac.compare_digest(secret, telegram.webhook_secret()):
+        return JSONResponse(status_code=404, content={"error": "no"})
+    update = await request.json()
+    message = update.get("message") or {}
+    reply = await run_in_threadpool(follow.handle, message)
+    if reply:
+        await run_in_threadpool(telegram.send, message["chat"]["id"], reply)
+    return {"ok": True}
 
 
 @app.post("/api/feedback")

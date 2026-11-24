@@ -278,3 +278,4 @@ a { color: var(--accent); }
   .msg-user, .msg-ai { max-width: 100%; }
   .topbar .badge { display: none; }
 }
+.follow-note { margin-top: 10px; font-size: 14px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); }

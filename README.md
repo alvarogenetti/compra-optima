@@ -8,8 +8,8 @@ en tres rangos: económica, equilibrada y premium.
 Nació del [tracker de monitores](https://github.com/alvarogenetti/monitor-precios-tracker): lo que allá
 se hizo a mano (PERFIL.md → requisitos → buscar en tiendas), acá lo hace una IA para cualquier producto.
 
-> **Estado:** prototipo para probar con amigos y familia. Todavía no sigue precios en el tiempo
-> (el botón "Seguir precio" está deshabilitado): eso es la siguiente etapa.
+> **Estado:** prueba con amigos y familia. Además de recomendar, **sigue precios**: con "Seguir precio"
+> te avisa por Telegram cuando un modelo baja de verdad (ver [Seguir precio](#seguir-precio-telegram--neon)).
 
 ## Uso
 
@@ -54,8 +54,48 @@ búsquedas; se cambian con `LIMIT_INTERVIEW_PER_HOUR` / `LIMIT_SEARCH_PER_HOUR`)
 te gasta el cupo gratis de Gemini. En tu PC, sin `ACCESS_CODE`, no pide nada.
 
 **Limitaciones del plan gratis:** el servidor se duerme después de 15 minutos sin uso y la primera
-visita tarda alrededor de un minuto en despertarlo. Frávega bloquea a los servidores en la nube, así
-que es probable que ahí no responda (en "Dónde buscamos" aparece como error; el resto sigue).
+visita tarda alrededor de un minuto en despertarlo. Desde Render, Comeros, DeCaba y Hardcore responden
+403 (bloquean servidores en la nube; desde tu PC andan) y Frávega sí responde. Desde GitHub Actions
+(escaneo de "Seguir precio") Frávega suele bloquear, como en el tracker. En "Dónde buscamos" se ve cuáles
+respondieron.
+
+## Seguir precio (Telegram + Neon)
+
+**Cómo se usa.** En cada resultado, **🔔 Seguir precio** → **Abrir Telegram** → **Iniciar**. Listo: sin
+cuentas ni contraseñas. El bot confirma el precio de hoy y avisa cuando ese modelo esté **al menos 15 %
+más barato que su precio habitual** (🔥 excepcional desde 30 %). En el bot: `/lista` muestra lo que
+seguís y `/dejar_<n>` deja de seguir. Máximo 20 productos por persona.
+
+**Cómo funciona.**
+
+- `core/follow.py`: la web crea el seguimiento con un token y devuelve `t.me/<bot>?start=<token>`; el
+  `/start <token>` lo vincula al chat. Si alguien comparte el link, quien lo abre tiene su propio
+  seguimiento. Los links que nadie abrió en una semana se borran.
+- `core/watch.py` (GitHub Actions cada 3 h, `.github/workflows/watch.yml`; también a mano con "Run
+  workflow"): busca cada modelo seguido **una sola vez** aunque lo sigan muchos, en las tiendas de su
+  categoría. Sólo cuenta una publicación si el título tiene todas las palabras del modelo salvo la marca
+  ("G502 Hero" no pasa por "G502 Lightspeed") y no es un accesorio ("Cable USB para G502", "Funda...").
+  Guarda el más barato de cada tienda en el historial. **Sin IA**: no gasta cupo de Gemini.
+- `core/market.py` (traído del tracker): **precio habitual** = mediana del mejor precio de cada escaneo
+  en 30 días, sin las últimas 24 h; hasta tener 6 escaneos en 2 días, el precio de cuando empezaste a
+  seguirlo. Si la tienda anuncia un descuento grande que contra el mercado es menos de la mitad, el
+  aviso dice que está inflado. La misma oferta no se repite: sólo si mejora 3 % o pasó una semana.
+- `core/db.py`: Postgres de **Neon** (`DATABASE_URL`, la misma en Render y en GitHub Actions); en tu PC
+  sin `DATABASE_URL`, SQLite en `data/compra.db`. Tablas `watchers`, `follows`, `prices`.
+- El webhook del bot se registra solo cuando arranca en Render (`RENDER_EXTERNAL_URL`).
+
+**Activarlo (una vez).**
+
+1. **Bot nuevo**: en Telegram, @BotFather → `/newbot` (ej. "Compra Óptima", usuario `CompraOptimaBot`
+   o el que esté libre). El token va en `COMPRA_BOT_TOKEN`. **No uses el bot del tracker**: se le
+   registraría el webhook.
+2. **Neon**: https://neon.tech con tu GitHub → crear proyecto (región São Paulo o US East) → copiar la
+   *connection string* (`postgresql://...sslmode=require`). Va en `DATABASE_URL`.
+3. **Render** (servicio → Environment): `COMPRA_BOT_TOKEN` y `DATABASE_URL`. Se redeploya solo.
+4. **GitHub** (repo → Settings → Secrets and variables → Actions): los mismos dos como secrets.
+
+GitHub desactiva los workflows programados de un repo público sin actividad en 60 días: si pasa,
+se reactivan desde la pestaña Actions.
 
 ## Cómo funciona
 
@@ -125,7 +165,8 @@ Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.js
 ## Próximas etapas
 
 1. Probar con amigos y familia y ajustar los prompts con lo que llegue por "¿Te sirvió?".
-2. Seguimiento de precios para varios usuarios (base de datos, escaneos programados, avisos).
+2. Seguir precio: historial en la web (gráfico como el del tracker), "avisame si baja de $X",
+   eventos (Black Friday, Cyber Monday) con referencias congeladas, cuotas en pesos de hoy.
 3. Más tiendas y categorías (belleza, deportes, hogar), oferta real, eventos, cuotas.
 4. Mercado Libre vía **ComparaYa** (como en el tracker desde el 24/11/2026: comparador afiliado de ML
    cuyas fichas públicas permite leer su robots.txt). Acá es más difícil porque la dirección de la ficha
@@ -137,7 +178,9 @@ Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.js
 
 ```
 app/        FastAPI (main.py) y la página (static/: index.html, app.js, styles.css)
-core/       ai (proveedores), demo, interview, stores, search, candidates, guard, feedback, price_parser, settings
+core/       ai (proveedores), demo, interview, stores, search, candidates, guard, feedback,
+            db, follow, telegram, market, watch, price_parser, settings
+.github/    workflows: watch (escaneo cada 3 h) y tests
 config/     stores.json: tiendas y categorías
 tests/      pytest sin red (IA y tiendas con dobles)
 ```
