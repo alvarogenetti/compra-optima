@@ -82,7 +82,8 @@ class GeminiAI:
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
         }
         r, failures = None, []
-        for model in self.models:
+        available = [m for m in self.models if not _cooling(m)]
+        for model in available:
             gc = dict(body["generationConfig"])
             if model.startswith("gemini-3"):
                 # Razonamiento corto: de ~3,5 s a ~2 s por pregunta, con la misma calidad en la entrevista
@@ -92,16 +93,20 @@ class GeminiAI:
                 self.model = model
                 break
             failures.append(f"{model}: {'sin respuesta' if r is None else 'HTTP %d' % r.status_code}")
+            _cool_down(model, r)
             log.info("Gemini %s no disponible, pruebo el siguiente", failures[-1])
         else:
             codes = {f.rsplit(" ", 1)[-1] for f in failures}
-            if codes == {"404"}:
+            if failures and codes == {"404"}:
                 raise AIError(f"Google ya no ofrece {', '.join(self.models)}. Cambiá GEMINI_MODEL en .env. "
                               f"Disponibles: {self._flash_models()}")
-            if "429" in codes and len(codes) == 1:
-                raise AIError("Se agotó el límite gratis de Gemini por ahora. Probá en un minuto.")
-            raise AIError("Gemini está saturado en este momento (le pasa seguido al plan gratis). "
-                          f"Probá de nuevo en un rato. ({'; '.join(failures)})")
+            wait = _seconds_until_free(self.models)
+            when = f"en {wait} segundos" if wait < 90 else f"en {wait // 60 + 1} minutos"
+            limited = "HTTP 429" in codes or (not failures and any(_cool_reason.get(m) == 429 for m in self.models))
+            if limited:
+                raise AIError(f"Llegamos al límite gratis de la IA por ahora (muchas consultas juntas). "
+                              f"Probá de nuevo {when}.")
+            raise AIError(f"La IA de Google está saturada en este momento. Probá de nuevo {when}.")
         if r.status_code in (400, 401, 403):
             raise AIError(f"Gemini rechazó el pedido (HTTP {r.status_code}): revisá GEMINI_API_KEY. "
                           f"{_err_detail(r)}")
@@ -138,6 +143,38 @@ class GeminiAI:
             return ", ".join(flash[:8]) or "(no se pudo listar)"
         except Exception:  # noqa: BLE001
             return "(no se pudo listar)"
+
+
+# Modelos que hay que saltear por un rato: {modelo: hasta cuándo (time.time())}. En memoria del servidor.
+_cooldown: dict[str, float] = {}
+_cool_reason: dict[str, int] = {}   # 429 = sin cupo, 503 = saturado
+COOL_DEFAULT_S = 60      # 429 sin "retryDelay": límite por minuto
+COOL_DAILY_S = 3600      # 429 por cupo diario: se vuelve a probar en una hora
+COOL_BUSY_S = 30         # 503 / sin respuesta
+
+
+def _cooling(model: str) -> bool:
+    return _cooldown.get(model, 0) > time.time()
+
+
+def _cool_down(model: str, r: httpx.Response | None) -> None:
+    """Después de un 429 Google dice cuánto esperar (retryDelay) y qué cupo se agotó (quotaId)."""
+    if r is not None and r.status_code == 404:
+        return
+    secs = COOL_BUSY_S
+    if r is not None and r.status_code == 429:
+        text = r.text
+        delay = re.search(r'"retryDelay":\s*"(\d+(?:\.\d+)?)s"', text)
+        secs = float(delay.group(1)) + 1 if delay else COOL_DEFAULT_S
+        if re.search(r"PerDay", text):
+            secs = max(secs, COOL_DAILY_S)
+    _cooldown[model] = time.time() + secs
+    _cool_reason[model] = 429 if r is not None and r.status_code == 429 else 503
+
+
+def _seconds_until_free(models: list[str]) -> int:
+    waits = [_cooldown.get(m, 0) - time.time() for m in models]
+    return max(5, int(min(waits)) + 1) if waits else 60
 
 
 def _err_detail(r: httpx.Response) -> str:

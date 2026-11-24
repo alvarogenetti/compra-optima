@@ -25,7 +25,7 @@ def gemini_key() -> str:
 
 
 def gemini_model() -> str:
-    return (os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview,gemini-flash-lite-latest,gemini-flash-latest").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.5-flash,gemini-flash-latest").strip()
 
 
 def access_code() -> str:

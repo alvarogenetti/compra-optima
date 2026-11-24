@@ -25,10 +25,13 @@ Crea el entorno la primera vez, copia `.env.example` a `.env` y abre http://127.
   la interfaz y la búsqueda en tiendas, pero los resultados traen cosas que no son el producto
   (sin IA no hay quien las filtre).
 
-`GEMINI_MODEL` es una lista en orden de preferencia (por defecto `gemini-3-flash-preview`, después los
-"lite" y `gemini-flash-latest`). Si uno está saturado (pasa seguido en el plan gratis), sin cupo o
-retirado, la app usa el siguiente. Con `gemini-3-flash-preview` cada pregunta tarda unos 2 s, el perfil
-unos 7 s y la búsqueda con evaluación unos 25 s.
+`GEMINI_MODEL` es una lista en orden de preferencia: primero `gemini-3-flash-preview` (unos 2 s por
+pregunta), después los "lite" (3-4 s) y al final `gemini-3.5-flash` (anda, pero tarda 10-18 s) y
+`gemini-flash-latest`. **Cada modelo tiene su propio cupo gratis**, así que con varios en la lista se
+aguanta mucho más. Si uno responde 429 (límite por minuto o por día), la app lo saltea el tiempo que
+indica Google (retryDelay; una hora si es el cupo diario) y usa el siguiente sin perder tiempo; si
+responde 503 (saturado), lo saltea 30 s. Si están todos en pausa, el mensaje dice en cuánto probar.
+La búsqueda con evaluación tarda unos 25 s.
 
 El plan gratis de Gemini tiene límites por minuto y por día, y Google puede usar lo que se le manda
 para mejorar sus modelos. Para una prueba chica alcanza; antes de abrirlo a más gente, conviene

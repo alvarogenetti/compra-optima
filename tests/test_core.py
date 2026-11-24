@@ -43,6 +43,7 @@ def test_parse_json_text_tolera_bloques_y_texto():
 
 def test_gemini_pasa_al_siguiente_modelo_si_esta_saturado(monkeypatch):
     monkeypatch.setattr("core.ai.RETRY_WAIT_S", 0)
+    monkeypatch.setattr("core.ai._cooldown", {})
     pedidos = []
 
     def handler(req: httpx.Request):
@@ -56,7 +57,7 @@ def test_gemini_pasa_al_siguiente_modelo_si_esta_saturado(monkeypatch):
     assert ai.model == "bueno"
     assert pedidos == ["saturado:generateContent"] * 2 + ["bueno:generateContent"]
     todos_mal = GeminiAI("k", "saturado", httpx.Client(transport=httpx.MockTransport(handler)))
-    with pytest.raises(AIError, match="saturado"):
+    with pytest.raises(AIError, match="saturada"):
         todos_mal.json("s", [{"role": "user", "content": "x"}], "interview")
 
 
@@ -386,3 +387,27 @@ def test_api_feedback(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     r = TestClient(app).post("/api/feedback", json={"useful": True, "comment": "genial", "product": "Mouse"})
     assert r.status_code == 200 and r.json() == {"ok": True, "sent": False}
+
+
+def test_gemini_saltea_modelos_con_limite_por_un_rato(monkeypatch):
+    from core import ai as ai_mod
+    monkeypatch.setattr(ai_mod, "RETRY_WAIT_S", 0)
+    monkeypatch.setattr(ai_mod, "_cooldown", {})
+    monkeypatch.setattr(ai_mod, "_cool_reason", {})
+    pedidos = []
+
+    def handler(req: httpx.Request):
+        modelo = req.url.path.split("/")[-1].split(":")[0]
+        pedidos.append(modelo)
+        if modelo == "lleno":
+            return httpx.Response(429, json={"error": {"details": [{"retryDelay": "20s"}]}})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"ok": 1}'}]}}]})
+
+    gem = GeminiAI("k", "lleno,bueno", httpx.Client(transport=httpx.MockTransport(handler)))
+    assert gem.json("s", [{"role": "user", "content": "x"}], "interview") == {"ok": 1}
+    assert gem.json("s", [{"role": "user", "content": "x"}], "interview") == {"ok": 1}
+    assert pedidos == ["lleno", "bueno", "bueno"]   # la segunda vez ni lo intenta
+    solo_lleno = GeminiAI("k", "lleno", httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AIError, match="límite gratis"):
+        solo_lleno.json("s", [{"role": "user", "content": "x"}], "interview")
+    assert pedidos[-1] == "bueno"   # "lleno" sigue en pausa: no se volvió a pedir

@@ -168,6 +168,9 @@ function renderOptions() {
   box.innerHTML = "";
   const t = state.last;
   if (!t || t.type !== "question" || state.adjusting) return;
+  // Si lo último es una respuesta del usuario, esa pregunta ya se contestó: sin opciones hasta la próxima
+  const lastMsg = state.conversation[state.conversation.length - 1];
+  if (!lastMsg || lastMsg.role === "user") return;
   const picked = new Set();
   for (const opt of t.options || []) {
     const b = document.createElement("button");
