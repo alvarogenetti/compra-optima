@@ -1,0 +1,274 @@
+"""Tests sin red: la IA y las tiendas se reemplazan por dobles."""
+from __future__ import annotations
+
+import json
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+from core import candidates, interview, search, settings, stores
+from core.ai import AIError, GeminiAI, parse_json_text, set_ai
+from core.demo import DemoAI, clean_query, guess_category
+
+
+class FakeAI:
+    """Devuelve respuestas preparadas por tarea y guarda lo que se le pidió."""
+    name = "fake"
+
+    def __init__(self, **by_task):
+        self.by_task = by_task
+        self.calls = []
+
+    def json(self, system, messages, task):
+        self.calls.append((task, messages))
+        r = self.by_task[task]
+        return r(messages) if callable(r) else r
+
+
+@pytest.fixture(autouse=True)
+def _reset_ai():
+    yield
+    set_ai(None)
+
+
+# ------------------------------------------------------------------ IA
+def test_parse_json_text_tolera_bloques_y_texto():
+    assert parse_json_text('```json\n{"a": 1}\n```') == {"a": 1}
+    assert parse_json_text('Acá va: {"a": 2} listo') == {"a": 2}
+    with pytest.raises(AIError):
+        parse_json_text("nada")
+
+
+def test_gemini_pasa_al_siguiente_modelo_si_esta_saturado(monkeypatch):
+    monkeypatch.setattr("core.ai.RETRY_WAIT_S", 0)
+    pedidos = []
+
+    def handler(req: httpx.Request):
+        pedidos.append(req.url.path.split("/")[-1])
+        if "saturado" in str(req.url):
+            return httpx.Response(503)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"ok": 1}'}]}}]})
+
+    ai = GeminiAI("k", "saturado, bueno", httpx.Client(transport=httpx.MockTransport(handler)))
+    assert ai.json("s", [{"role": "user", "content": "x"}], "interview") == {"ok": 1}
+    assert ai.model == "bueno"
+    assert pedidos == ["saturado:generateContent"] * 2 + ["bueno:generateContent"]
+    todos_mal = GeminiAI("k", "saturado", httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AIError, match="saturado"):
+        todos_mal.json("s", [{"role": "user", "content": "x"}], "interview")
+
+
+def test_gemini_arma_el_pedido_y_explica_errores():
+    seen = {}
+
+    def handler(req: httpx.Request):
+        if req.method == "GET":
+            return httpx.Response(200, json={"models": [
+                {"name": "models/gemini-3-flash", "supportedGenerationMethods": ["generateContent"]}]})
+        seen["body"] = json.loads(req.content)
+        seen["key"] = req.headers["x-goog-api-key"]
+        if "viejo" in str(req.url):
+            return httpx.Response(404, json={"error": {"message": "not found"}})
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"ok": true}'}]}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ai = GeminiAI("clave", "gemini-x", client)
+    assert ai.json("sys", [{"role": "user", "content": "hola"}, {"role": "assistant", "content": "{}"}],
+                   "interview") == {"ok": True}
+    assert seen["key"] == "clave"
+    assert [c["role"] for c in seen["body"]["contents"]] == ["user", "model"]
+    assert seen["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    with pytest.raises(AIError, match="gemini-3-flash"):
+        GeminiAI("clave", "viejo", client).json("s", [{"role": "user", "content": "x"}], "interview")
+    with pytest.raises(AIError, match="GEMINI_API_KEY"):
+        GeminiAI("", "m")
+
+
+# ------------------------------------------------------------------ entrevista
+def test_normalize_pregunta_recorta_y_limpia():
+    out = interview.normalize({"type": "question", "question": "¿Para qué?", "options": ["a", "A", "b", ""] + ["x"] * 9,
+                               "draft": [{"label": "Uso", "value": "juegos"}, {"label": "", "value": "x"}]})
+    assert out["options"] == ["a", "b", "x"]
+    assert out["draft"] == [{"label": "Uso", "value": "juegos"}]
+    with pytest.raises(AIError):
+        interview.normalize({"type": "question", "question": ""})
+
+
+def test_normalize_perfil_categoria_y_presupuesto():
+    p = interview.normalize_profile({"product": "Mouse", "category": "INFORMATICA",
+                                     "must": ["Inalámbrico", {"feature": "Ergonómico", "why": "muñeca"}],
+                                     "budget": {"level": "medio", "max_ars": "80000"}, "search_queries": []})
+    assert p["category"] == "informatica"
+    assert p["must"][0]["feature"] == "Inalámbrico" and p["must"][1]["why"] == "muñeca"
+    assert p["budget"] == {"level": "medio", "max_ars": 80000.0, "note": ""}
+    assert p["search_queries"] == ["mouse"]
+    assert interview.normalize_profile({"category": "inventada"})["category"] in stores.load().categories
+
+
+def test_step_fuerza_el_perfil_al_llegar_al_maximo():
+    profile = {"type": "profile", "profile": {"product": "Mouse", "category": "informatica"}}
+    fake = FakeAI(interview=lambda msgs: profile if "sistema" in msgs[-1]["content"] else
+                  {"type": "question", "question": "¿Otra?"})
+    set_ai(fake)
+    conv = [{"role": "user", "content": "un mouse"}]
+    for _ in range(settings.MAX_QUESTIONS):
+        conv += [{"role": "assistant", "content": json.dumps({"type": "question", "question": "q"})},
+                 {"role": "user", "content": "r"}]
+    out = interview.step(conv)
+    assert out["type"] == "profile"
+    assert "preguntas permitidas" in fake.calls[-1][1][-1]["content"]
+
+
+def test_step_pide_arrancar_con_el_usuario():
+    with pytest.raises(AIError):
+        interview.step([{"role": "assistant", "content": "{}"}])
+
+
+def test_demo_hace_la_entrevista_completa():
+    set_ai(DemoAI())
+    conv = [{"role": "user", "content": "Quiero una secadora de pelo"}]
+    for _ in range(10):
+        out = interview.step(conv)
+        if out["type"] == "profile":
+            break
+        conv += [{"role": "assistant", "content": json.dumps(out)}, {"role": "user", "content": out["options"][0]}]
+    assert out["type"] == "profile"
+    assert out["profile"]["category"] == "cuidado-personal"
+    assert out["profile"]["search_queries"] == ["secadora de pelo"]
+
+
+def test_demo_explica_si_no_sabe():
+    set_ai(DemoAI())
+    first = interview.step([{"role": "user", "content": "un mouse"}])
+    again = interview.step([{"role": "user", "content": "un mouse"},
+                            {"role": "assistant", "content": json.dumps(first)},
+                            {"role": "user", "content": "No sé, explicame las opciones"}])
+    assert again["explanation"] and again["question"] == first["question"]
+
+
+def test_helpers_demo():
+    assert clean_query("Quiero comprarme un mouse para jugar") == "mouse jugar"
+    assert guess_category("una freidora de aire") == "pequenos-electro"
+
+
+# ------------------------------------------------------------------ tiendas
+STORE = stores.Store(id="t", name="Tienda", platform="vtex", host="www.tienda.com.ar", categories=("informatica",))
+
+
+def test_registro_filtra_por_categoria():
+    reg = stores.load()
+    ids = {s.id for s in reg.for_categories(["cuidado-personal"])}
+    assert "fravega" in ids and "comeros" not in ids
+    assert all(s.platform in search.PLATFORMS for s in reg.stores)
+
+
+def test_parse_vtex_vendedor_mas_barato_con_stock():
+    prods = [{"productName": "Mouse X", "link": "https://t/mouse-x/p", "items": [{"sellers": [
+        {"commertialOffer": {"Price": 30000, "ListPrice": 40000, "AvailableQuantity": 3,
+                             "Installments": [{"NumberOfInstallments": 6, "InterestRate": 0}]}},
+        {"commertialOffer": {"Price": 25000, "ListPrice": 25000, "AvailableQuantity": 0}},
+    ]}]}]
+    [o] = search.parse_vtex(prods, STORE)
+    assert (o["price"], o["list"], o["cuotas"], o["store_name"]) == (30000.0, 40000.0, 6, "Tienda")
+
+
+def test_parse_woocommerce_y_tiendanube():
+    woo = [{"name": "Mouse &amp; Pad", "permalink": "u", "is_in_stock": True,
+            "prices": {"price": "1500000", "regular_price": "1800000", "currency_minor_unit": 2}}]
+    [w] = search.parse_woocommerce(woo, STORE)
+    assert (w["title"], w["price"], w["list"]) == ("Mouse & Pad", 15000.0, 18000.0)
+    html = ('<div class="js-item-product"><a href="https://t/productos/mouse/" title="Mouse G">'
+            '<div class="item-name">Mouse G</div><div data-variants="[{&quot;available&quot;:true,'
+            '&quot;price_number&quot;:50000,&quot;price_with_payment_discount_short&quot;:&quot;$45.000&quot;}]">'
+            '</div></a></div>')
+    [t] = search.parse_tiendanube(html, STORE)
+    assert (t["title"], t["price"], t["list"]) == ("Mouse G", 45000.0, 50000)
+
+
+def test_search_all_sigue_si_una_tienda_falla_y_excluye():
+    ok = stores.Store(id="ok", name="OK", platform="woocommerce", host="ok.com", categories=())
+    bad = stores.Store(id="bad", name="Mala", platform="woocommerce", host="bad.com", categories=())
+
+    def handler(req):
+        if req.url.host == "bad.com":
+            return httpx.Response(403)
+        return httpx.Response(200, json=[
+            {"name": "Mouse Logitech", "permalink": "a", "prices": {"price": "20000"}},
+            {"name": "Mouse Logitech usado", "permalink": "b", "prices": {"price": "9000"}},
+            {"name": "Pad para mouse", "permalink": "c", "prices": {"price": "5000"}}])
+
+    rep = search.search_all([ok, bad], ["mouse", "mouse logitech"], exclude=["pad"],
+                            client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert [x["title"] for x in rep.listings] == ["Mouse Logitech"]   # sin repetidos, usados ni pads
+    st = {s["id"]: s for s in rep.stores}
+    assert st["ok"]["ok"] and not st["bad"]["ok"] and "403" in st["bad"]["error"]
+
+
+def test_links_manuales():
+    assert search.mercadolibre_url("Secador de pelo iónico") == "https://listado.mercadolibre.com.ar/secador-de-pelo-ionico"
+    assert "keyword=" in search.store_search_url(stores.Store("fravega", "F", "vtex", "www.fravega.com", ()), "x")
+
+
+# ------------------------------------------------------------------ candidatos
+def _listing(i, title, price, store="a"):
+    return {"store": store, "store_name": store.upper(), "title": title, "price": price, "list": None,
+            "cuotas": None, "promo": None, "url": f"https://{store}/{i}"}
+
+
+def test_prefilter_relevancia_y_tope():
+    prof = {"budget": {"max_ars": 50000}}
+    ls = [_listing(1, "Mouse inalámbrico Logitech", 30000), _listing(2, "Secador de goma", 3000),
+          _listing(3, "Mouse inalámbrico Razer", 90000)]
+    assert [x["title"] for x in candidates.prefilter(ls, prof, ["mouse inalambrico"])] == ["Mouse inalámbrico Logitech"]
+
+
+def test_agrupa_por_modelo_y_arma_rangos():
+    ev = []
+    for i, (model, price, score) in enumerate([("A1", 10, 80), ("A2", 12, 70), ("B1", 20, 90), ("B2", 25, 60),
+                                                ("C1", 40, 95), ("C2", 45, 85), ("Malo", 5, 30)]):
+        ev.append({**_listing(i, model, price * 1000), "model": model, "score": score,
+                   "meets": [], "doubts": [], "reason": ""})
+    ev.append({**_listing(99, "A1 otra tienda", 9000, store="b"), "model": "a1", "score": 80,
+               "meets": [], "doubts": [], "reason": ""})
+    models = candidates.group_by_model(ev, cap=42000)
+    a1 = next(m for m in models if m["model"] == "A1")
+    assert a1["best"]["price"] == 9000 and len(a1["offers"]) == 2
+    tiers = candidates.build_tiers(models)
+    assert [t["key"] for t in tiers] == ["economica", "equilibrada", "premium"]
+    assert all(c["model"] != "Malo" for t in tiers for c in t["candidates"])
+    assert next(m for m in models if m["model"] == "C2")["over_budget"]
+    assert candidates.recommend(tiers) == "B1"
+
+
+def test_find_completo_con_dobles(monkeypatch):
+    def fake_search(shops, queries, exclude=None):
+        assert {s.id for s in shops} >= {"fravega"} and "Philips BHD350" in queries
+        return search.SearchReport(
+            listings=[_listing(1, "Secador de pelo Philips BHD350", 60000), _listing(2, "Secador de pelo Gama", 40000)],
+            stores=[{"id": "fravega", "name": "Frávega", "ok": True, "found": 2, "error": None}])
+
+    monkeypatch.setattr(candidates, "search_all", fake_search)
+    set_ai(FakeAI(evaluate={"items": [
+        {"id": 0, "model": "Philips BHD350", "score": 88, "meets": ["Iónico"], "reason": "Cuida el pelo"},
+        {"id": 1, "model": "Gama Tempo", "score": 40}, {"id": 7, "model": "fantasma", "score": 99}]}))
+    prof = interview.normalize_profile({"product": "Secador de pelo", "category": "cuidado-personal",
+                                        "search_queries": ["secador de pelo"], "suggested_models": ["Philips BHD350"]})
+    out = candidates.find(prof)
+    assert out["recommended"] == "Philips BHD350"
+    assert out["counts"] == {"found": 2, "evaluated": 2, "matching": 1}
+    assert out["links"]["mercadolibre"][0]["url"].endswith("/secador-de-pelo")
+
+
+# ------------------------------------------------------------------ API
+def test_api_entrevista_y_errores():
+    set_ai(DemoAI())
+    c = TestClient(app)
+    assert c.get("/api/status").json()["stores"] == len(stores.load().stores)
+    r = c.post("/api/interview", json={"conversation": [{"role": "user", "content": "un mouse"}]})
+    assert r.status_code == 200 and r.json()["type"] == "question"
+    set_ai(FakeAI(interview={"type": "question", "question": ""}))
+    r = c.post("/api/interview", json={"conversation": [{"role": "user", "content": "un mouse"}]})
+    assert r.status_code == 400 and "pregunta" in r.json()["error"]
+    assert c.get("/").status_code == 200

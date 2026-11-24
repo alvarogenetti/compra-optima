@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compra Óptima</title>
+  <meta name="description" content="Contanos qué querés comprar: te ayudamos a elegir el producto ideal para tu uso y a encontrarlo al mejor precio.">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" id="brand-link">
+      <span class="brand-mark" aria-hidden="true">✓</span>
+      <span>Compra <strong>Óptima</strong></span>
+    </a>
+    <div class="topbar-right">
+      <span class="badge" id="provider-badge" hidden></span>
+      <button class="link-btn" id="restart-btn" hidden>Empezar de nuevo</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. Inicio -->
+    <section id="view-home" class="view">
+      <div class="hero">
+        <h1>¿Qué querés comprar?</h1>
+        <p class="lead">Contanos en pocas palabras. Te hacemos unas preguntas simples sobre cómo lo vas a usar,
+          te explicamos qué conviene y por qué, y buscamos precios reales en las tiendas.</p>
+        <form id="start-form" class="start-form">
+          <label for="start-input" class="sr-only">Lo que querés comprar</label>
+          <textarea id="start-input" rows="2" maxlength="600"
+            placeholder="Ej: un mouse para la compu del trabajo, me duele la muñeca"></textarea>
+          <button type="submit" class="btn btn-primary" id="start-btn">Empezar</button>
+        </form>
+        <div class="chips" id="examples" aria-label="Ejemplos">
+          <button type="button" class="chip">Un mouse para jugar</button>
+          <button type="button" class="chip">Una secadora de pelo para pelo largo</button>
+          <button type="button" class="chip">Auriculares para el colectivo</button>
+          <button type="button" class="chip">Una freidora de aire para dos personas</button>
+        </div>
+      </div>
+      <ol class="steps">
+        <li><span class="step-n">1</span><div><strong>Te preguntamos por tu uso</strong><p>Nada de tecnicismos: si algo no se entiende, te lo explicamos.</p></div></li>
+        <li><span class="step-n">2</span><div><strong>Armamos tu producto ideal</strong><p>Qué tiene que tener, qué es deseable y por qué no pagar de más.</p></div></li>
+        <li><span class="step-n">3</span><div><strong>Buscamos precios reales</strong><p>En <span id="store-count">varias</span> tiendas argentinas, en tres rangos de precio.</p></div></li>
+      </ol>
+    </section>
+
+    <!-- 2. Entrevista -->
+    <section id="view-chat" class="view" hidden>
+      <div class="chat-layout">
+        <div class="chat-col">
+          <div class="progress" id="progress" aria-live="polite"></div>
+          <div class="thread" id="thread" aria-live="polite"></div>
+          <div class="composer" id="composer">
+            <div class="options" id="options"></div>
+            <form id="answer-form" class="answer-form">
+              <label for="answer-input" class="sr-only">Tu respuesta</label>
+              <input id="answer-input" type="text" maxlength="600" autocomplete="off"
+                placeholder="O escribí tu respuesta…">
+              <button type="submit" class="btn btn-primary">Enviar</button>
+            </form>
+            <div class="composer-actions">
+              <button type="button" class="link-btn" id="explain-btn">No sé, explicame</button>
+              <button type="button" class="link-btn" id="finish-btn" hidden>Ya está, mostrame el resultado</button>
+            </div>
+          </div>
+        </div>
+        <aside class="draft-col">
+          <h2>Lo que sé hasta ahora</h2>
+          <dl id="draft" class="draft"></dl>
+        </aside>
+      </div>
+    </section>
+
+    <!-- 3. Perfil -->
+    <section id="view-profile" class="view" hidden>
+      <div class="profile" id="profile"></div>
+      <div class="profile-actions">
+        <button class="btn btn-primary btn-lg" id="search-btn">Buscar precios</button>
+        <button class="btn" id="adjust-btn">Corregir algo</button>
+      </div>
+    </section>
+
+    <!-- 4. Resultados -->
+    <section id="view-results" class="view" hidden>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="alert" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
