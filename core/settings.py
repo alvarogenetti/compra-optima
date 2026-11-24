@@ -40,4 +40,4 @@ LIMIT_SEARCH_PER_HOUR = int(os.getenv("LIMIT_SEARCH_PER_HOUR") or 12)
 
 MAX_QUESTIONS = 8         # la entrevista no pasa de esto: con más, la gente abandona
 SEARCH_TIMEOUT_S = 20      # por tienda
-MAX_LISTINGS_TO_EVALUATE = 80
+MAX_LISTINGS_TO_EVALUATE = 120

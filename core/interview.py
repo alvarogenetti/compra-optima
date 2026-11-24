@@ -52,10 +52,18 @@ EL PERFIL
 - "summary": 2 o 3 oraciones con el producto ideal en criollo.
 - "category": UNA de estas categorías (la clave exacta):
 {categories}
-- "search_queries": de 2 a 4 búsquedas cortas como las escribiría alguien en el buscador de una tienda
-  argentina (sin marcas salvo que la persona las pida), por ejemplo "mouse inalambrico", "mouse ergonomico".
-- "suggested_models": hasta 6 modelos concretos y conocidos que cumplan y se vendan en Argentina
-  ("Logitech G305"). Sólo si estás seguro de que existen; se verifican contra las tiendas.
+- "search_queries": de 2 a 3 búsquedas AMPLIAS para el buscador de una tienda argentina. El buscador
+  busca esas palabras LITERALMENTE en los títulos de las publicaciones, y los títulos dicen el tipo de
+  producto y datos concretos ("Mouse Gamer Inalámbrico Logitech G502 Lightspeed"), nunca necesidades.
+  Por eso: tipo de producto + como mucho UNA palabra que aparezca en títulos reales.
+  Bien: "mouse inalambrico", "mouse gamer inalambrico", "mouse vertical", "secador de pelo ionico".
+  Mal: "mouse muchos botones", "mouse productivo", "mouse comodo para trabajar", "logitech g502".
+  El filtro fino (cantidad de botones, comodidad, etc.) lo hacemos después leyendo cada publicación:
+  acá conviene traer de más. Sin marcas salvo que la persona las pida, y sin modelos (van abajo).
+- "suggested_models": de 4 a 8 modelos concretos y conocidos que cumplan el perfil y se vendan en
+  Argentina, repartidos en distintos rangos de precio (algunos accesibles, algunos de gama media,
+  alguno de gama alta), con marca y modelo ("Logitech G502 Lightspeed"). Sólo si estás seguro de que
+  existen; se buscan en las tiendas y si no aparecen no se recomiendan.
 - "exclude_words": palabras de publicaciones que NO son el producto (accesorios, repuestos, combos que
   no pidió), por ejemplo ["pad", "funda", "repuesto"].
 - "budget": {{"level": "economico" | "medio" | "alto" | "sin_definir", "max_ars": número o null (sólo si
@@ -180,7 +188,11 @@ def normalize_profile(p: dict) -> dict:
     except (TypeError, ValueError):
         max_ars = None
     product = _s(p.get("product"), 80) or "Producto"
-    queries = _strings(p.get("search_queries"), 4) or [product.lower()]
+    models = _strings(p.get("suggested_models"), 8)
+    model_keys = {m.lower() for m in models}
+    # Las búsquedas son amplias: sin modelos (van aparte) y de pocas palabras
+    queries = [q for q in _strings(p.get("search_queries"), 4)
+               if q.lower() not in model_keys and len(q.split()) <= 5][:3] or [product.lower()]
     return {
         "product": product,
         "category": cat,
@@ -192,6 +204,6 @@ def normalize_profile(p: dict) -> dict:
                    "max_ars": max_ars if max_ars and max_ars > 0 else None,
                    "note": _s(budget.get("note"), 200)},
         "search_queries": queries,
-        "suggested_models": _strings(p.get("suggested_models"), 6),
+        "suggested_models": models,
         "exclude_words": _strings(p.get("exclude_words"), 15, 40),
     }

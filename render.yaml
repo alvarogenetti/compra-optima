@@ -18,3 +18,7 @@ services:
         sync: false        # se carga a mano en Render (no va al repo)
       - key: ACCESS_CODE
         sync: false        # el código que les pasás a amigos y familia
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false        # opcional: los "¿Te sirvió?" te llegan por Telegram (sirve el bot del tracker)
+      - key: TELEGRAM_CHAT_ID
+        sync: false

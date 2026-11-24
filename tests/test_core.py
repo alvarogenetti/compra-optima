@@ -305,3 +305,84 @@ def test_api_entrevista_y_errores(monkeypatch):
     r = c.post("/api/interview", json={"conversation": [{"role": "user", "content": "un mouse"}]})
     assert r.status_code == 400 and "pregunta" in r.json()["error"]
     assert c.get("/").status_code == 200
+
+
+# ------------------------------------------------------------------ Fase 1: búsquedas y resultados
+def test_perfil_saca_modelos_y_frases_largas_de_las_busquedas():
+    p = interview.normalize_profile({"product": "Mouse", "category": "informatica",
+                                     "search_queries": ["mouse inalambrico", "Logitech G502",
+                                                        "mouse inalambrico con muchos botones para trabajar"],
+                                     "suggested_models": ["Logitech G502", "Razer Naga V2 Pro"]})
+    assert p["search_queries"] == ["mouse inalambrico"]
+    assert p["suggested_models"] == ["Logitech G502", "Razer Naga V2 Pro"]
+
+
+def test_query_match_exige_el_codigo_del_modelo():
+    assert candidates.query_match({"title": "Mouse Logitech G305"}, "Logitech G502") == 0.0
+    assert candidates.query_match({"title": "Mouse Logitech G502 X"}, "Logitech G502") == 1.0
+    assert candidates.query_match({"title": "Mouse Gamer Redragon"}, "mouse inalambrico") == 0.5
+
+
+def test_spread_reparte_por_precio_segun_presupuesto():
+    items = [_listing(i, f"mouse {i}", (i + 1) * 1000) for i in range(10)]
+    prices = lambda xs: [x["price"] for x in xs]  # noqa: E731
+    assert prices(candidates.spread(items, 3, "medio")) == [1000, 5000, 10000]
+    assert max(prices(candidates.spread(items, 3, "economico"))) <= 6000
+    assert min(prices(candidates.spread(items, 3, "alto"))) >= 5000
+
+
+def test_prefilter_da_lugar_a_cada_modelo_sugerido(monkeypatch):
+    monkeypatch.setattr(settings, "MAX_LISTINGS_TO_EVALUATE", 10)
+    baratos = [_listing(i, f"Mouse inalambrico generico {i}", 5000 + i) for i in range(40)]
+    g502 = _listing(99, "Mouse Gamer Inalambrico Logitech G502 Lightspeed", 150000)
+    pool = candidates.prefilter(baratos + [g502], {"budget": {"level": "alto"}},
+                                ["mouse inalambrico"], ["Logitech G502 Lightspeed"])
+    assert pool[0] is g502 and len(pool) == 10
+
+
+def test_rangos_por_precio_juntan_precios_parecidos():
+    def m(name, price):
+        return {"model": name, "score": 80, "best": {"price": price}}
+    tiers = candidates.build_tiers([m("A", 16500), m("B", 32000), m("C", 41600), m("D", 44600),
+                                    m("Trust", 65200), m("Lift", 66000), m("MX", 118000)])
+    where = {c["model"]: t["key"] for t in tiers for c in t["candidates"]}
+    assert where["Trust"] == where["Lift"]
+    assert candidates.recommend(tiers, "alto") in {c["model"] for t in tiers if t["key"] == "premium" for c in t["candidates"]}
+
+
+def test_casi_cumplen():
+    ms = [{"model": x, "score": s, "best": {"price": 1}} for x, s in [("a", 90), ("b", 50), ("c", 40), ("d", 20)]]
+    assert [m["model"] for m in candidates.near_misses(ms)] == ["b", "c"]
+
+
+def test_usados_y_outlet_no_entran():
+    assert search.is_used("Mouse Logitech OUTLET caja abierta")
+    assert search.is_used("Secador Philips (exhibición)")
+    assert not search.is_used("Mouse Logitech G502 nuevo")
+
+
+def test_feedback_por_telegram(monkeypatch):
+    from core import feedback
+    sent = {}
+
+    def handler(req):
+        sent["url"] = str(req.url)
+        sent["body"] = json.loads(req.content)
+        return httpx.Response(200, json={"ok": True})
+
+    fb = {"useful": False, "comment": "faltó el G502", "product": "Mouse", "recommended": "Razer Naga",
+          "matching": 1, "queries": ["mouse inalambrico"]}
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    assert feedback.send(fb) is False
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "T")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    assert feedback.send(fb, httpx.Client(transport=httpx.MockTransport(handler))) is True
+    assert sent["url"].endswith("/botT/sendMessage") and sent["body"]["chat_id"] == "42"
+    assert "👎" in sent["body"]["text"] and "faltó el G502" in sent["body"]["text"]
+
+
+def test_api_feedback(monkeypatch):
+    monkeypatch.delenv("ACCESS_CODE", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    r = TestClient(app).post("/api/feedback", json={"useful": True, "comment": "genial", "product": "Mouse"})
+    assert r.status_code == 200 and r.json() == {"ok": True, "sent": False}

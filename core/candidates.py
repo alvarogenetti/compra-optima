@@ -51,25 +51,72 @@ def _tokens(s: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", _fold(s)) if len(t) > 1}
 
 
+MODEL_QUOTA = 6   # publicaciones por modelo sugerido (alcanza para ver varias tiendas)
+
+
+def query_match(listing: dict, query: str) -> float:
+    """Qué tan bien matchea el título una búsqueda (0 a 1), sin IA. Si la búsqueda tiene un código
+    con números ("G502", "BHD350"), el título tiene que tenerlo sí o sí."""
+    title, qt = _tokens(listing["title"]), _tokens(query)
+    if not qt:
+        return 0.0
+    if any(t not in title for t in qt if any(c.isdigit() for c in t)):
+        return 0.0
+    return len(qt & title) / len(qt)
+
+
 def relevance(listing: dict, queries: list[str]) -> float:
-    """Qué tan bien matchea el título alguna de las búsquedas (0 a 1), sin IA."""
-    title = _tokens(listing["title"])
-    best = 0.0
-    for q in queries:
-        qt = _tokens(q)
-        if qt:
-            best = max(best, len(qt & title) / len(qt))
-    return best
+    return max((query_match(listing, q) for q in queries), default=0.0)
 
 
-def prefilter(listings: list[dict], profile: dict, queries: list[str]) -> list[dict]:
-    cap = profile.get("budget", {}).get("max_ars")
+def spread(items: list[dict], n: int, level: str) -> list[dict]:
+    """Elige n publicaciones repartidas por precio, según el presupuesto: económico mira el 60 % más
+    barato, alto el 60 % más caro, el resto todo el rango. Así se evalúan opciones de cada rango y no
+    sólo las más baratas."""
+    if n <= 0 or not items:
+        return []
+    items = sorted(items, key=lambda x: x["price"])
+    cut = max(1, round(len(items) * 0.6))
+    if level == "economico":
+        items = items[:cut]
+    elif level == "alto":
+        items = items[-cut:]
+    if len(items) <= n:
+        return items
+    step = (len(items) - 1) / (n - 1) if n > 1 else 0
+    return [items[round(i * step)] for i in range(n)] if n > 1 else [items[len(items) // 2]]
+
+
+def prefilter(listings: list[dict], profile: dict, broad: list[str], models: list[str] | None = None) -> list[dict]:
+    """Qué publicaciones se le mandan a la IA (no se pueden mandar todas).
+
+    Primero las de cada modelo sugerido (hasta MODEL_QUOTA cada uno, las más baratas), después el
+    cupo restante repartido en partes iguales entre las búsquedas amplias, cada parte repartida
+    por precio según el presupuesto."""
+    budget = profile.get("budget", {})
+    cap, level = budget.get("max_ars"), budget.get("level", "sin_definir")
     keep = [x for x in listings if not cap or x["price"] <= cap * 1.3]
-    for x in keep:
-        x["_rel"] = relevance(x, queries)
-    keep = [x for x in keep if x["_rel"] >= 0.5]
-    keep.sort(key=lambda x: (-x["_rel"], x["price"]))
-    return keep[:settings.MAX_LISTINGS_TO_EVALUATE]
+    limit = settings.MAX_LISTINGS_TO_EVALUATE
+    chosen: list[dict] = []
+    seen: set[int] = set()
+
+    def take(items):
+        for x in items:
+            if id(x) not in seen and len(chosen) < limit:
+                seen.add(id(x))
+                chosen.append(x)
+
+    for m in models or []:
+        take(sorted((x for x in keep if query_match(x, m) >= 0.6), key=lambda x: x["price"])[:MODEL_QUOTA])
+    pools = [[x for x in keep if query_match(x, q) >= 0.5] for q in broad]
+    pools = [p for p in pools if p]
+    if pools:
+        share = max(1, (limit - len(chosen)) // len(pools))
+        for p in pools:
+            take(spread([x for x in p if id(x) not in seen], share, level))
+        for p in pools:   # lo que sobró del reparto, por si alguna búsqueda trajo poco
+            take(spread([x for x in p if id(x) not in seen], limit - len(chosen), level))
+    return chosen
 
 
 def profile_text(profile: dict) -> str:
@@ -142,16 +189,26 @@ def group_by_model(evaluated: list[dict], cap: float | None = None) -> list[dict
     return out
 
 
+def price_buckets(good: list[dict]) -> list[list[dict]]:
+    """Tres tramos cortados por PRECIO (no por cantidad), en escala proporcional: entre el más barato y
+    el más caro, los cortes van a 1/3 y 2/3 del camino en proporción. Así dos modelos de casi el mismo
+    precio caen juntos, y $20.000 contra $40.000 pesa lo mismo que $100.000 contra $200.000."""
+    lo, hi = good[0]["best"]["price"], good[-1]["best"]["price"]
+    if len(good) <= PER_TIER or hi <= lo * 1.15:
+        return [good, [], []]
+    ratio = hi / lo
+    t1, t2 = lo * ratio ** (1 / 3), lo * ratio ** (2 / 3)
+    return [[m for m in good if m["best"]["price"] < t1],
+            [m for m in good if t1 <= m["best"]["price"] < t2],
+            [m for m in good if m["best"]["price"] >= t2]]
+
+
 def build_tiers(models: list[dict]) -> list[dict]:
-    """Corta por precio en tercios entre los que cumplen; en cada tramo, los mejores puntajes."""
+    """Corta por precio en tres tramos entre los que cumplen; en cada tramo, los mejores puntajes."""
     good = sorted((m for m in models if m["score"] >= MIN_SCORE), key=lambda m: m["best"]["price"])
     if not good:
         return []
-    if len(good) <= PER_TIER:
-        buckets = [good, [], []]
-    else:
-        n = len(good)
-        buckets = [good[: n // 3 or 1], good[n // 3 or 1: 2 * n // 3], good[2 * n // 3:]]
+    buckets = price_buckets(good)
     tiers = []
     for (key, label, blurb), bucket in zip(TIERS, buckets):
         if not bucket:
@@ -165,13 +222,27 @@ def build_tiers(models: list[dict]) -> list[dict]:
     return tiers
 
 
-def recommend(tiers: list[dict]) -> str | None:
-    """Mi elección: el mejor puntaje de la equilibrada (o del tramo que haya), el más barato si empatan."""
-    pool = next((t["candidates"] for t in tiers if t["key"] == "equilibrada"), None) or \
+PREFERRED_TIER = {"economico": "economica", "alto": "premium"}
+
+
+def recommend(tiers: list[dict], level: str = "sin_definir") -> str | None:
+    """Mi elección: el mejor puntaje del tramo que va con el presupuesto (económico → económica,
+    alto → premium, el resto → equilibrada); si ese tramo no existe, de todos. El más barato si empatan."""
+    want = PREFERRED_TIER.get(level, "equilibrada")
+    pool = next((t["candidates"] for t in tiers if t["key"] == want), None) or \
         [c for t in tiers for c in t["candidates"]]
     if not pool:
         return None
     return max(pool, key=lambda m: (m["score"], -m["best"]["price"]))["model"]
+
+
+NEAR_MIN = 35
+
+
+def near_misses(models: list[dict], n: int = 4) -> list[dict]:
+    """Los que casi cumplen (les falta algo): se muestran aparte, con lo que les falta."""
+    near = [m for m in models if NEAR_MIN <= m["score"] < MIN_SCORE]
+    return sorted(near, key=lambda m: (-m["score"], m["best"]["price"]))[:n]
 
 
 def find(profile: dict) -> dict:
@@ -179,22 +250,24 @@ def find(profile: dict) -> dict:
     shops = reg.for_categories([profile["category"]])
     if not shops:
         raise AIError("Todavía no tenemos tiendas para esa categoría.")
-    queries = profile["search_queries"] + [m for m in profile.get("suggested_models", [])
-                                           if m.lower() not in {q.lower() for q in profile["search_queries"]}]
-    report = search_all(shops, queries, profile.get("exclude_words"))
-    pool = prefilter(report.listings, profile, queries)
+    broad = profile["search_queries"]
+    models_q = [m for m in profile.get("suggested_models", []) if m.lower() not in {q.lower() for q in broad}]
+    report = search_all(shops, broad + models_q, profile.get("exclude_words"))
+    pool = prefilter(report.listings, profile, broad, models_q)
     evaluated = evaluate(pool, profile)
-    models = group_by_model(evaluated, profile.get("budget", {}).get("max_ars"))
+    budget = profile.get("budget", {})
+    models = group_by_model(evaluated, budget.get("max_ars"))
     tiers = build_tiers(models)
-    main_q = profile["search_queries"][0]
+    main_q = broad[0]
     return {
         "tiers": tiers,
-        "recommended": recommend(tiers),
+        "near": near_misses(models),
+        "recommended": recommend(tiers, budget.get("level", "sin_definir")),
         "stores": sorted(report.stores, key=lambda s: (not s["ok"], -s["found"], s["name"])),
         "counts": {"found": len(report.listings), "evaluated": len(pool),
                    "matching": sum(1 for m in models if m["score"] >= MIN_SCORE)},
         "links": {
-            "mercadolibre": [{"query": q, "url": mercadolibre_url(q)} for q in profile["search_queries"]],
+            "mercadolibre": [{"query": q, "url": mercadolibre_url(q)} for q in broad + models_q[:3]],
             "stores": [{"name": s.name, "url": store_search_url(s, main_q)} for s in shops],
         },
     }

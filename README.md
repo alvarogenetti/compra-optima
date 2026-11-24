@@ -44,6 +44,8 @@ clave de Gemini y las búsquedas en tiendas). Render tiene un plan gratis que al
 3. Te pide dos valores que no van al repo:
    - `GEMINI_API_KEY`: tu clave de AI Studio.
    - `ACCESS_CODE`: un código cualquiera (ej. `milanesa2026`) que les pasás a amigos y familia.
+   - Opcional, `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`: los comentarios de **"¿Te sirvió?"** te llegan
+     por Telegram (sirve el mismo bot del tracker). Sin esto, quedan en los Logs de Render.
 4. Listo: queda en `https://compra-optima.onrender.com` (o parecido). Cada push a `main` se publica solo.
 
 **Protección de la versión publicada** (`core/guard.py`): con `ACCESS_CODE` definido, la web pide el
@@ -80,10 +82,17 @@ Texto libre ──► Entrevista (IA) ──► Perfil de compra ──► Tiend
 4. **Búsqueda real** (`core/search.py`): el buscador público de cada plataforma, en paralelo. Los
    modelos sugeridos por la IA también se buscan: **si no aparecen en ninguna tienda, no se
    recomiendan** (así no hay productos inventados o que no se venden acá).
-5. **Candidatos** (`core/candidates.py`): prefiltro sin IA (relevancia, tope de presupuesto), la IA
-   evalúa cada publicación (¿es el producto?, puntaje, modelo normalizado), se agrupa por modelo (la
-   misma cosa en varias tiendas) y se corta en tercios de precio. "Mi recomendación" es el mejor
-   puntaje del rango equilibrado.
+5. **Candidatos** (`core/candidates.py`):
+   - **Búsquedas amplias** ("mouse inalambrico gamer"), nunca necesidades ("mouse muchos botones"): el
+     buscador de la tienda busca las palabras literalmente en los títulos. El filtro fino lo hace la IA.
+   - **Qué se evalúa** (hasta 120 publicaciones): primero hasta 6 de cada modelo sugerido (el título
+     tiene que tener su código, ej. "G502"), después el resto repartido entre las búsquedas amplias y
+     por precio según el presupuesto (económico mira el 60 % más barato, alto el 60 % más caro).
+     Los usados, outlet, exhibición y caja abierta se descartan (mismo criterio que el tracker).
+   - La IA evalúa cada publicación (¿es el producto?, puntaje, modelo normalizado), se agrupa por
+     modelo y se corta en **tres rangos por precio** (en proporción: dos modelos de precio parecido
+     caen juntos). "Mi recomendación" sale del rango que va con el presupuesto.
+   - **Casi cumplen**: los que tienen puntaje 35-54, con lo que les falta.
 
 ### Capa de IA
 
@@ -115,17 +124,20 @@ Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.js
 
 ## Próximas etapas
 
-1. Probar la entrevista con productos reales y ajustar los prompts.
+1. Probar con amigos y familia y ajustar los prompts con lo que llegue por "¿Te sirvió?".
 2. Seguimiento de precios para varios usuarios (base de datos, escaneos programados, avisos).
 3. Más tiendas y categorías (belleza, deportes, hogar), oferta real, eventos, cuotas.
-4. Monetización: links de afiliado (sin cobrar por destacar productos: la recomendación tiene que
+4. Mercado Libre vía **ComparaYa** (como en el tracker desde el 24/11/2026: comparador afiliado de ML
+   cuyas fichas públicas permite leer su robots.txt). Acá es más difícil porque la dirección de la ficha
+   se arma con marca y código, y sirve sólo para los modelos que ya encontramos.
+5. Monetización: links de afiliado (sin cobrar por destacar productos: la recomendación tiene que
    ser neutral).
 
 ## Estructura
 
 ```
 app/        FastAPI (main.py) y la página (static/: index.html, app.js, styles.css)
-core/       ai (proveedores), demo, interview, stores, search, candidates, price_parser, settings
+core/       ai (proveedores), demo, interview, stores, search, candidates, guard, feedback, price_parser, settings
 config/     stores.json: tiendas y categorías
 tests/      pytest sin red (IA y tiendas con dobles)
 ```

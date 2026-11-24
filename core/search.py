@@ -29,7 +29,16 @@ log = logging.getLogger("search")
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/131.0 Safari/537.36")
-DEFAULT_EXCLUDE = ["usado", "reacondicionado", "refurbished", "open box", "openbox"]
+DEFAULT_EXCLUDE: list[str] = []
+
+# No es nuevo: outlet, usado, reacondicionado, exhibición, caja abierta... (igual que el tracker de monitores)
+USED_RE = re.compile(r"\b(outlet|usad[oa]s?|reacondicionad[oa]s?|refurbish\w*|open\s?box|caja\s+abierta|"
+                     r"exhibicion|de\s+muestra|grado\s+[bc]|b-?stock|pixel(es)?\s+(quemad|muert)\w*|"
+                     r"detalles?\s+esteticos?)\b")
+
+
+def is_used(title: str) -> bool:
+    return bool(USED_RE.search(_fold(title)))
 
 
 class BlockedError(RuntimeError):
@@ -234,7 +243,7 @@ def search_all(stores: list[Store], queries: list[str], exclude: list[str] | Non
             st["ok"] = True
         for it in items:
             key = (it["store"], it["url"] or it["title"])
-            if key in seen or is_excluded(it["title"], exclude):
+            if key in seen or is_used(it["title"]) or is_excluded(it["title"], exclude):
                 continue
             seen.add(key)
             it["query"] = q

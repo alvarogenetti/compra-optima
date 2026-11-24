@@ -246,6 +246,7 @@ async function search() {
     <p>Consultamos precios reales y después evaluamos cada publicación contra tu perfil. Puede tardar hasta un minuto.</p></div>`;
   try {
     state.results = await api("/api/candidates", { profile: state.profile });
+    state.feedbackSent = false;
     renderResults();
   } catch (e) {
     $("#results").innerHTML = `<div class="empty-state"><h2>No pudimos terminar la búsqueda</h2><p>${esc(e.message)}</p>
@@ -292,11 +293,16 @@ function renderResults() {
   const storeStatus = `<section class="panel"><details><summary><b>Dónde buscamos</b> · ${ok} de ${r.stores.length} tiendas respondieron · ${r.counts.found} publicaciones, ${r.counts.evaluated} evaluadas</summary>
       <ul class="store-status">${r.stores.map((s) => `<li class="${s.ok ? "" : "bad"}">${s.ok ? "✓" : "✗"} ${esc(s.name)} <small>${s.ok ? `${s.found} resultado${s.found === 1 ? "" : "s"}` : esc(s.error || "sin respuesta")}</small></li>`).join("")}</ul>
       <div class="link-list">${r.links.stores.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">Buscar en ${esc(l.name)}</a>`).join("")}</div></details></section>`;
+  const near = (r.near || []).length ? `<section class="near"><h2>Casi cumplen</h2>
+      <p class="blurb">Les falta algo de tu perfil (lo marcamos con ?), pero pueden servirte si aflojás ese punto.</p>
+      <div class="tiers">${r.near.map((c) => card(c, false)).join("")}</div></section>` : "";
+  const fb = feedbackBox();
   if (!r.tiers.length) {
-    $("#results").innerHTML = `<div class="empty-state"><h2>No encontramos opciones que cumplan</h2>
-      <p>Revisamos ${r.counts.found} publicaciones en ${ok} tiendas y ninguna encaja bien con tu perfil. Probá corregir el perfil (por ejemplo, aflojar algún requisito) o mirá en Mercado Libre.</p>
-      <p><button class="btn" id="back-profile">Volver al perfil</button></p></div>${ml}${storeStatus}`;
+    $("#results").innerHTML = `<div class="empty-state"><h2>No encontramos opciones que cumplan todo</h2>
+      <p>Revisamos ${r.counts.found} publicaciones en ${ok} tiendas y ninguna encaja del todo con tu perfil. Probá corregir el perfil (por ejemplo, aflojar algún requisito) o mirá en Mercado Libre.</p>
+      <p><button class="btn" id="back-profile">Volver al perfil</button></p></div>${near}${ml}${fb}${storeStatus}`;
     $("#back-profile").addEventListener("click", () => show("profile"));
+    bindFeedback();
     return;
   }
   $("#results").innerHTML = `<div class="results-head"><h1>${esc(state.profile.product)}: tus opciones</h1>
@@ -305,8 +311,57 @@ function renderResults() {
     <div class="tiers">${r.tiers.map((t) => `<section class="tier"><h2>${esc(t.label)}</h2>
         <p class="blurb">${esc(t.blurb)} <span class="range">${money.format(t.price_from)}${t.price_to > t.price_from ? " – " + money.format(t.price_to) : ""}</span></p>
         ${t.candidates.map((c) => card(c, c.model === r.recommended)).join("")}</section>`).join("")}</div>
-    ${ml}${storeStatus}`;
+    ${near}${ml}${fb}${storeStatus}`;
   $("#back-profile").addEventListener("click", () => show("profile"));
+  bindFeedback();
+}
+
+/* ---------------- ¿Te sirvió? ---------------- */
+function feedbackBox() {
+  if (state.feedbackSent) return `<section class="panel feedback"><h2>¡Gracias por contarnos!</h2><p>Con lo que nos dicen vamos mejorando las preguntas y los resultados.</p></section>`;
+  return `<section class="panel feedback" id="feedback">
+      <h2>¿Te sirvió?</h2>
+      <p>Estamos probando Compra Óptima con amigos y familia: contanos qué estuvo bien y qué no.</p>
+      <div class="fb-choices">
+        <button type="button" class="option" data-useful="1" aria-pressed="false">👍 Sí</button>
+        <button type="button" class="option" data-useful="0" aria-pressed="false">👎 No mucho</button>
+      </div>
+      <label for="fb-comment" class="sr-only">Comentario</label>
+      <textarea id="fb-comment" rows="3" maxlength="1500" placeholder="Opcional: ¿qué preguntas te parecieron raras? ¿Faltó algún producto? ¿Algún resultado no tenía sentido?"></textarea>
+      <button type="button" class="btn btn-primary" id="fb-send" disabled>Enviar</button>
+    </section>`;
+}
+
+function bindFeedback() {
+  const box = $("#feedback");
+  if (!box) return;
+  let useful = null;
+  for (const b of box.querySelectorAll("[data-useful]")) {
+    b.addEventListener("click", () => {
+      useful = b.dataset.useful === "1";
+      for (const o of box.querySelectorAll("[data-useful]")) o.setAttribute("aria-pressed", String(o === b));
+      $("#fb-send").disabled = false;
+    });
+  }
+  $("#fb-send").addEventListener("click", async () => {
+    const btn = $("#fb-send");
+    btn.disabled = true;
+    try {
+      const r = state.results || {};
+      await api("/api/feedback", {
+        useful, comment: $("#fb-comment").value.trim(),
+        product: state.profile?.product || "", recommended: r.recommended || "",
+        matching: r.counts?.matching ?? null,
+        queries: state.profile?.search_queries || [],
+      });
+      state.feedbackSent = true;
+      save();
+      box.outerHTML = feedbackBox();
+    } catch (e) {
+      toast(e.message);
+      btn.disabled = false;
+    }
+  });
 }
 
 /* ---------------- Eventos ---------------- */

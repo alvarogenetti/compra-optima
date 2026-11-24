@@ -247,6 +247,18 @@ a { color: var(--accent); }
 .store-status { list-style: none; padding: 0; margin: 12px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; font-size: 14px; }
 .store-status .bad { color: var(--danger); }
 .store-status small { color: var(--muted); }
+.near { margin-top: 36px; }
+.near h2 { font-size: 20px; text-align: center; }
+.near .blurb { color: var(--muted); font-size: 14px; text-align: center; margin-top: 4px; }
+.near .tiers { margin-top: 16px; }
+.near .card { box-shadow: none; opacity: .92; }
+.feedback { display: grid; gap: 12px; max-width: 640px; margin-left: auto; margin-right: auto; }
+.fb-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.feedback textarea {
+  font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); resize: vertical;
+}
+.feedback .btn { justify-self: start; }
 .empty-state { text-align: center; max-width: 560px; margin: 48px auto; }
 .empty-state p { color: var(--muted); margin-top: 8px; }
 

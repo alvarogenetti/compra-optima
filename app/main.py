@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core import candidates, guard, interview, settings, stores
+from core import candidates, feedback, guard, interview, settings, stores
 from core.ai import AIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -36,6 +36,15 @@ class InterviewIn(BaseModel):
 
 class CandidatesIn(BaseModel):
     profile: dict
+
+
+class FeedbackIn(BaseModel):
+    useful: bool | None = None
+    comment: str = Field(default="", max_length=1500)
+    product: str = Field(default="", max_length=120)
+    recommended: str = Field(default="", max_length=120)
+    matching: int | None = None
+    queries: list[str] = Field(default_factory=list, max_length=12)
 
 
 @app.exception_handler(AIError)
@@ -88,6 +97,14 @@ def do_interview(body: InterviewIn, request: Request):
 def do_candidates(body: CandidatesIn, request: Request):
     protect(request, "search", settings.LIMIT_SEARCH_PER_HOUR)
     return candidates.find(interview.normalize_profile(body.profile))
+
+
+@app.post("/api/feedback")
+def do_feedback(body: FeedbackIn, request: Request):
+    protect(request, "feedback", 10)
+    data = body.model_dump()
+    data["queries"] = [q[:80] for q in data["queries"]]
+    return {"ok": True, "sent": feedback.send(data)}
 
 
 if __name__ == "__main__":
