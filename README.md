@@ -79,6 +79,10 @@ seguís y `/dejar_<n>` deja de seguir. Máximo 20 productos por persona.
   categoría. Sólo cuenta una publicación si el título tiene todas las palabras del modelo salvo la marca
   ("G502 Hero" no pasa por "G502 Lightspeed") y no es un accesorio ("Cable USB para G502", "Funda...").
   Guarda el más barato de cada tienda en el historial. **Sin IA**: no gasta cupo de Gemini.
+- **Primer escaneo de cada seguimiento**: no avisa ofertas, fija el punto de partida real. La web pudo
+  haber mostrado otra publicación del mismo modelo (ej. Frávega tenía el MSI PRO MP241 a $474.962 y
+  a $293.716): si el escaneo lo encuentra 15 % o más barato que lo que se vio, lo cuenta como **dato**
+  ("es otra publicación, no una baja") y toma ese precio como partida.
 - `core/market.py` (traído del tracker): **precio habitual** = mediana del mejor precio de cada escaneo
   en 30 días, sin las últimas 24 h; hasta tener 6 escaneos en 2 días, el precio de cuando empezaste a
   seguirlo. Si la tienda anuncia un descuento grande que contra el mercado es menos de la mitad, el

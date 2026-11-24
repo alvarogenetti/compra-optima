@@ -73,6 +73,7 @@ def history(c, key: str, since: datetime) -> list[tuple[datetime, float]]:
                      .where(db.prices.c.model_key == key, db.prices.c.ts >= since)).all()
     per_scan: dict[datetime, float] = {}
     for ts, price in rows:
+        ts = market._aware(ts)   # SQLite devuelve fechas sin zona horaria
         per_scan[ts] = min(price, per_scan.get(ts, price))
     return sorted(per_scan.items())
 
@@ -99,6 +100,23 @@ def alert_text(f: dict, best: dict, disc: float, ref: float, src: str) -> str:
     return "\n".join(lines)
 
 
+def baseline(c, f: dict, best: dict, tg_client=None) -> bool:
+    """Si el primer escaneo lo encuentra bastante más barato que lo que se vio en la web (otra
+    publicación del mismo modelo), lo cuenta como dato y toma ese precio como punto de partida.
+    Devuelve True si mandó el aviso."""
+    if best["price"] >= f["start_price"] * (1 - market.GOOD):
+        if best["price"] < f["start_price"]:
+            c.execute(db.follows.update().where(db.follows.c.id == f["id"]).values(start_price=best["price"]))
+        return False
+    c.execute(db.follows.update().where(db.follows.c.id == f["id"]).values(
+        start_price=best["price"], start_store=best["store_name"][:80], start_url=best["url"]))
+    text = (f"Dato: encontré {f['model']} más barato que lo que viste en la web: {money(best['price'])} "
+            f"en {best['store_name']} (vos lo viste a {money(f['start_price'])}). No es una baja de precio, "
+            f"es otra publicación del mismo modelo.\n{best['url']}\n\n"
+            "Desde ahora tomo ese precio como punto de partida para avisarte bajas reales.")
+    return telegram.send(f["chat_id"], text, tg_client)
+
+
 def run(client=None, tg_client=None, now: datetime | None = None) -> dict:
     now = now or db.now()
     eng = db.engine()
@@ -113,7 +131,7 @@ def run(client=None, tg_client=None, now: datetime | None = None) -> dict:
     for r in rows:
         groups[r["model_key"]].append(dict(r))
 
-    summary = {"models": len(groups), "found": 0, "alerts": 0}
+    summary = {"models": len(groups), "found": 0, "alerts": 0, "notes": 0}
     for key, fs in groups.items():
         model, category = fs[0]["model"], fs[0]["category"]
         try:
@@ -133,6 +151,12 @@ def run(client=None, tg_client=None, now: datetime | None = None) -> dict:
                 "price": o["price"], "list_price": o.get("list"), "title": o["title"][:500], "url": o["url"],
                 "extra": {"cuotas": o.get("cuotas"), "promo": o.get("promo")}} for o in offers])
             for f in fs:
+                if not any(ts >= market._aware(f["created_at"]) for ts, _ in points):
+                    # Primer escaneo de este seguimiento: fija el punto de partida real, sin avisar
+                    # ofertas (la web pudo haber mostrado otra publicación del mismo modelo).
+                    if baseline(c, f, best, tg_client):
+                        summary["notes"] += 1
+                    continue
                 ref, src = market.reference(points, seed=f["start_price"], now=now)
                 disc = market.real_discount(best["price"], ref)
                 if not market.level(disc) or not should_alert(f, best["price"], now):

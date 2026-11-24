@@ -278,7 +278,7 @@ function card(c, recommended) {
     ${c.reason ? `<p class="reason">${esc(c.reason)}</p>` : ""}
     <ul class="checks">${(c.meets || []).map((m) => `<li>${esc(m)}</li>`).join("")}${(c.doubts || []).map((d) => `<li class="doubt">${esc(d)}</li>`).join("")}</ul>
     <div class="actions">
-      <a class="btn btn-primary" href="${esc(best.url)}" target="_blank" rel="noopener">Ver en ${esc(best.store_name)}</a>
+      <a class="btn btn-primary" href="${esc(best.url)}" target="_blank" rel="noopener">${best.store_name.length <= 12 ? `Ver en ${esc(best.store_name)}` : "Ver oferta"}</a>
       ${status.follow_enabled
         ? `<button class="btn follow-btn" data-follow="${cardModels.push(c) - 1}" title="Te avisamos por Telegram cuando baje de verdad">🔔 Seguir precio</button>`
         : `<button class="btn" disabled title="Próximamente: te avisamos cuando baje de verdad">Seguir precio</button>`}
@@ -330,7 +330,7 @@ function renderResults() {
       <div class="link-list">${r.links.stores.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">Buscar en ${esc(l.name)}</a>`).join("")}</div></details></section>`;
   const near = (r.near || []).length ? `<section class="near"><h2>Casi cumplen</h2>
       <p class="blurb">Les falta algo de tu perfil (lo marcamos con ?), pero pueden servirte si aflojás ese punto.</p>
-      <div class="tiers">${r.near.map((c) => card(c, false)).join("")}</div></section>` : "";
+      <div class="tier-cards">${r.near.map((c) => card(c, false)).join("")}</div></section>` : "";
   const fb = feedbackBox();
   if (!r.tiers.length) {
     $("#results").innerHTML = `<div class="empty-state"><h2>No encontramos opciones que cumplan todo</h2>
@@ -344,9 +344,13 @@ function renderResults() {
   $("#results").innerHTML = `<div class="results-head"><h1>${esc(state.profile.product)}: tus opciones</h1>
       <p>${r.counts.matching} modelo${r.counts.matching === 1 ? "" : "s"} encaja${r.counts.matching === 1 ? "" : "n"} con tu perfil. Precios de hoy, de contado o transferencia cuando la tienda lo informa.</p>
       <p><button class="link-btn" id="back-profile">Ver mi perfil</button></p></div>
-    <div class="tiers">${r.tiers.map((t) => `<section class="tier"><h2>${esc(t.label)}</h2>
-        <p class="blurb">${esc(t.blurb)} <span class="range">${money.format(t.price_from)}${t.price_to > t.price_from ? " – " + money.format(t.price_to) : ""}</span></p>
-        ${t.candidates.map((c) => card(c, c.model === r.recommended)).join("")}</section>`).join("")}</div>
+    <div class="tiers">${r.tiers.map((t) => `<section class="tier tier-${esc(t.key)}">
+        <header class="tier-head">
+          <h2>${esc(t.label)}</h2>
+          <span class="range">${money.format(t.price_from)}${t.price_to > t.price_from ? " – " + money.format(t.price_to) : ""}</span>
+          <p class="blurb">${esc(t.blurb)}</p>
+        </header>
+        <div class="tier-cards">${t.candidates.map((c) => card(c, c.model === r.recommended)).join("")}</div></section>`).join("")}</div>
     ${near}${ml}${fb}${storeStatus}`;
   $("#back-profile").addEventListener("click", () => show("profile"));
   bindFeedback();
