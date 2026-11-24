@@ -62,6 +62,14 @@ prices = Table(
 )
 
 
+comparaya_slugs = Table(
+    "comparaya_slugs", meta,   # dirección de la ficha de ComparaYa de cada modelo (o vacía si no existe)
+    Column("model_key", String(120), primary_key=True),
+    Column("slug", String(200)),
+    Column("checked_at", DateTime(timezone=True), nullable=False),
+)
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 

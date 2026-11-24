@@ -160,3 +160,24 @@ def test_primer_escaneo_mas_barato_es_un_dato_no_una_baja(monkeypatch):
     assert follow.active_for_chat("1")[0]["start_price"] == 293716
     # El escaneo siguiente al mismo precio no avisa nada
     assert watch.run(now=db.now() + timedelta(hours=3))["alerts"] == 0 and len(sent) == 1
+
+
+@pytest.fixture(autouse=True)
+def sin_comparaya(monkeypatch, request):
+    """Los tests del escaneo no salen a ComparaYa (salvo el que lo prueba a propósito)."""
+    if "comparaya" not in request.node.name:
+        monkeypatch.setattr(watch.comparaya, "find", lambda *a, **k: {"found": False, "ml": [], "others": []})
+
+
+def test_escaneo_suma_mercadolibre_via_comparaya(monkeypatch):
+    sent = []
+    monkeypatch.setattr(telegram, "send", lambda chat, text, client=None: sent.append(text) or True)
+    monkeypatch.setattr(watch.comparaya, "find", lambda *a, **k: {"found": True, "others": [], "ml": [
+        {"shop": "Mercado Libre", "title": "Mouse Logitech G502 Lightspeed (importado)", "price": 50000,
+         "list": None, "url": "https://ml/importado", "intl": True},
+        {"shop": "Mercado Libre", "title": "Mouse Logitech G502 Lightspeed", "price": 90000,
+         "list": None, "url": "https://ml/x", "intl": False}]})
+    monkeypatch.setattr(watch, "search_all", lambda *a, **k: search.SearchReport(listings=[_listing(100000)]))
+    offers = watch.scan_model("Logitech G502 Lightspeed", "informatica", "Mouse")
+    assert [o["store"] for o in offers] == ["mercadolibre", "fravega"]   # el importado no cuenta
+    assert offers[0]["store_name"] == "Mercado Libre (vía ComparaYa)" and offers[0]["price"] == 90000

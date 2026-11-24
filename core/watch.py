@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import and_, delete, select
 
-from core import db, market, stores, telegram
+from core import comparaya, db, market, stores, telegram
 from core.candidates import _fold
 from core.follow import money
 from core.search import search_all
@@ -64,7 +64,25 @@ def scan_model(model: str, category: str, product: str = "", client=None) -> lis
     for x in report.listings:
         if matches(x, model, product) and (x["store"] not in best or x["price"] < best[x["store"]]["price"]):
             best[x["store"]] = x
+    ml = mercadolibre_offer(model, product, min(best.values(), key=lambda x: x["price"])["title"] if best else "")
+    if ml:
+        best["mercadolibre"] = ml
     return sorted(best.values(), key=lambda x: x["price"])
+
+
+def mercadolibre_offer(model: str, product: str, title: str = "") -> dict | None:
+    """La oferta nueva más barata de Mercado Libre según la ficha de ComparaYa (sin importados)."""
+    try:
+        r = comparaya.find(model, product, title)
+    except Exception as e:  # noqa: BLE001 — ComparaYa caído no corta el escaneo
+        log.info("ComparaYa %s: %s", model, e)
+        return None
+    local = [o for o in r.get("ml", []) if not o.get("intl")]
+    if not local:
+        return None
+    o = local[0]
+    return {"store": "mercadolibre", "store_name": "Mercado Libre (vía ComparaYa)", "title": o["title"],
+            "price": o["price"], "list": o.get("list"), "cuotas": None, "promo": None, "url": o["url"]}
 
 
 def history(c, key: str, since: datetime) -> list[tuple[datetime, float]]:

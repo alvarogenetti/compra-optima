@@ -411,3 +411,28 @@ def test_gemini_saltea_modelos_con_limite_por_un_rato(monkeypatch):
     with pytest.raises(AIError, match="límite gratis"):
         solo_lleno.json("s", [{"role": "user", "content": "x"}], "interview")
     assert pedidos[-1] == "bueno"   # "lleno" sigue en pausa: no se volvió a pedir
+
+
+# ------------------------------------------------------------------ ComparaYa (Mercado Libre)
+def test_comparaya_direcciones_y_ofertas_exactas():
+    from core import comparaya
+    assert comparaya.slug_candidates("Monitor para oficina", "MSI PRO MP241", "Monitor MSI PRO MP241 24 pulgadas") == [
+        "monitor-msi-pro-mp241-24", "monitor-msi-pro-mp241", "monitor-msi-mp241-24", "monitor-msi-mp241"]
+    assert comparaya.slug_candidates("Mouse", "Logitech G502 Lightspeed")[0] == "mouse-logitech-g502-lightspeed"
+    page = ('<h2>Precios por tienda</h2><ol>'
+            '<li><span>Mercado Libre</span><p title="Mouse Logitech G502 Lightspeed">x</p><p>$<!-- -->124.804</p>'
+            '<a href="https://www.mercadolibre.com.ar/x">ir</a></li>'
+            '<li><span>Amonpul</span><p title="Mouse Logitech G502 HERO">x</p><p>$<!-- -->50.000</p>'
+            '<a href="https://amonpul/y">ir</a></li>'
+            '<li><span>Otra</span><p title="Mouse Logitech G502 Lightspeed usado">x</p><p>$<!-- -->40.000</p>'
+            '<a href="https://otra/z">ir</a></li></ol>')
+    offers = comparaya.exact_offers(page, "Logitech G502 Lightspeed")
+    assert [(o["shop"], o["price"]) for o in offers] == [("Mercado Libre", 124804.0)]
+
+
+def test_api_ml(monkeypatch):
+    from core import comparaya
+    monkeypatch.delenv("ACCESS_CODE", raising=False)
+    monkeypatch.setattr(comparaya, "find", lambda model, product, title="": {"found": True, "page_url": "u", "ml": [], "others": []})
+    r = TestClient(app).post("/api/ml", json={"model": "Logitech G502 Lightspeed", "product": "Mouse"})
+    assert r.status_code == 200 and r.json()["search_url"].endswith("/logitech-g502-lightspeed")

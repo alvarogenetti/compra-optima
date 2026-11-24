@@ -20,7 +20,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core import candidates, db, feedback, follow, guard, interview, settings, stores, telegram
+from core import (candidates, comparaya, db, feedback, follow, guard, interview, search, settings, stores,
+                  telegram)
 from core.ai import AIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -146,6 +147,21 @@ def do_follow(body: FollowIn, request: Request):
         raise AIError("Categoría desconocida.")
     tok = follow.create(body.model, body.category, body.product, body.best.model_dump())
     return {"link": telegram.deep_link(tok)}
+
+
+class MlIn(BaseModel):
+    model: str = Field(min_length=2, max_length=120)
+    product: str = Field(default="", max_length=120)
+    title: str = Field(default="", max_length=300)
+
+
+@app.post("/api/ml")
+def do_ml(body: MlIn, request: Request):
+    """"¿Y en Mercado Libre?": precio de ML (y de tiendas que no leemos) vía la ficha de ComparaYa."""
+    protect(request, "ml", 40)
+    out = comparaya.find(body.model, body.product, body.title)
+    out["search_url"] = search.mercadolibre_url(body.model)
+    return out
 
 
 @app.post("/api/telegram/{secret}")

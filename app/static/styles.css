@@ -285,3 +285,10 @@ a { color: var(--accent); }
   .topbar .badge { display: none; }
 }
 .follow-note { margin-top: 10px; font-size: 14px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); }
+.ml-box { margin-top: 10px; font-size: 14px; }
+.ml-result { margin-top: 6px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); display: grid; gap: 6px; }
+.ml-result ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.ml-result li { display: flex; justify-content: space-between; gap: 10px; }
+.ml-result .cheaper { color: var(--accent); font-weight: 600; }
+.ml-result .muted { color: var(--muted); }
+.ml-result .small { font-size: 12px; }

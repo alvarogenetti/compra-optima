@@ -22,6 +22,9 @@ log = logging.getLogger("ai")
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+# Cuánto esperar a un modelo antes de pasar al siguiente: una pregunta tarda 2-5 s; la evaluación
+# de candidatos manda mucho texto y puede tardar más.
+TIMEOUTS = {"interview": 20, "evaluate": 60}
 RETRIES = 1          # por modelo; después se pasa al siguiente de la lista
 RETRY_WAIT_S = 1.5
 
@@ -88,7 +91,7 @@ class GeminiAI:
             if model.startswith("gemini-3"):
                 # Razonamiento corto: de ~3,5 s a ~2 s por pregunta, con la misma calidad en la entrevista
                 gc["thinkingConfig"] = {"thinkingLevel": "low"}
-            r = self._post(model, {**body, "generationConfig": gc})
+            r = self._post(model, {**body, "generationConfig": gc}, TIMEOUTS.get(task, 30))
             if r is not None and r.status_code not in (404, 429, 500, 503):
                 self.model = model
                 break
@@ -119,13 +122,13 @@ class GeminiAI:
             raise AIError("Gemini no devolvió respuesta (puede haberla bloqueado por seguridad).") from None
         return parse_json_text(text)
 
-    def _post(self, model: str, body: dict) -> httpx.Response | None:
+    def _post(self, model: str, body: dict, timeout: float = 30) -> httpx.Response | None:
         """Un modelo, con reintentos cortos si está saturado. None si no respondió a tiempo."""
         r = None
         for attempt in range(RETRIES + 1):
             try:
                 r = self.client.post(GEMINI_URL.format(model=model), json=body,
-                                     headers={"x-goog-api-key": self.key})
+                                     headers={"x-goog-api-key": self.key}, timeout=timeout)
             except httpx.TimeoutException:
                 return None
             # 500/503: Google saturado (pasa seguido en el plan gratis). Suele durar segundos.

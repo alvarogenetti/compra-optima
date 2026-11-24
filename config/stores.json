@@ -1,5 +1,5 @@
 {
-  "_nota": "Tiendas donde se busca. Cada una con las categorías que vende y su plataforma (define cómo se lee la búsqueda: ver core/search.py). Sumar una tienda VTEX, WooCommerce o Tiendanube es agregar una entrada acá. Todas salen del tracker de monitores, donde ya se verificó que responden.",
+  "_nota": "Tiendas donde se busca. \"cloud_blocked\": true = bloquea servidores en la nube: no se consulta desde Render ni GitHub Actions (sí desde tu PC). Cada una con las categorías que vende y su plataforma (define cómo se lee la búsqueda: ver core/search.py). Sumar una tienda VTEX, WooCommerce o Tiendanube es agregar una entrada acá. Todas salen del tracker de monitores, donde ya se verificó que responden.",
   "categories": {
     "informatica": {"label": "Informática", "examples": "notebooks, PC, monitores, mouses, teclados, impresoras, componentes, routers"},
     "gaming": {"label": "Gaming", "examples": "consolas, joysticks, auriculares gamer, sillas gamer"},
@@ -39,13 +39,16 @@
     {"id": "diamond", "name": "Diamond Computación", "platform": "vtex", "host": "diamondcomputacion.com.ar",
      "categories": ["informatica", "gaming"]},
 
-    {"id": "comeros", "name": "Comeros", "platform": "woocommerce", "host": "www.comeros.com.ar", "categories": ["informatica", "gaming"]},
+    {"id": "comeros", "name": "Comeros", "platform": "woocommerce", "host": "www.comeros.com.ar", "categories": ["informatica", "gaming"], "cloud_blocked": true,
+     "notes": "Responde 403 desde servidores en la nube (Render, noviembre 2026); desde una PC anda."},
     {"id": "isinet", "name": "ISInet", "platform": "woocommerce", "host": "isinet.com.ar", "categories": ["informatica", "gaming"]},
     {"id": "auragamer", "name": "Aura Gamer", "platform": "woocommerce", "host": "auragamer.com.ar", "categories": ["informatica", "gaming"]},
     {"id": "espaciotek", "name": "Espaciotek", "platform": "woocommerce", "host": "espaciotek.com.ar", "categories": ["informatica", "gaming"]},
     {"id": "zonetech", "name": "Zonetech", "platform": "woocommerce", "host": "zonetech.com.ar", "categories": ["informatica", "gaming"]},
-    {"id": "hardcore", "name": "Hardcore Computación", "platform": "woocommerce", "host": "hardcorecomputacion.com.ar", "categories": ["informatica", "gaming"]},
-    {"id": "decaba", "name": "DeCaba", "platform": "woocommerce", "host": "decaba.com.ar", "categories": ["informatica", "gaming"]},
+    {"id": "hardcore", "name": "Hardcore Computación", "platform": "woocommerce", "host": "hardcorecomputacion.com.ar", "categories": ["informatica", "gaming"], "cloud_blocked": true,
+     "notes": "Responde 403 desde servidores en la nube (Render, noviembre 2026); desde una PC anda."},
+    {"id": "decaba", "name": "DeCaba", "platform": "woocommerce", "host": "decaba.com.ar", "categories": ["informatica", "gaming"], "cloud_blocked": true,
+     "notes": "Responde 403 desde servidores en la nube (Render, noviembre 2026); desde una PC anda."},
 
     {"id": "nickhard", "name": "Nickhard", "platform": "tiendanube", "host": "nickhard.com.ar", "categories": ["informatica", "gaming"]},
     {"id": "shopgamer", "name": "Shopgamer", "platform": "tiendanube", "host": "www.shopgamer.com.ar", "categories": ["informatica", "gaming"]},

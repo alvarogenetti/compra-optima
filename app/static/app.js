@@ -203,9 +203,9 @@ function renderDraft() {
 
 function renderProgress() {
   const asked = aiTurns().filter((t) => t && t.type === "question" && !t.explanation).length;
-  const max = (state.last && state.last.max_questions) || 8;
+  const max = (state.last && state.last.max_questions) || 10;
   $("#progress").innerHTML = state.adjusting ? "Corrigiendo el perfil" :
-    `Pregunta ${Math.max(asked, 1)} · suelen ser entre 4 y ${max}<div class="progress-bar"><span style="width:${Math.min(100, asked / max * 100)}%"></span></div>`;
+    `Pregunta ${Math.max(asked, 1)} · suelen ser entre 5 y ${max}<div class="progress-bar"><span style="width:${Math.min(100, asked / max * 100)}%"></span></div>`;
   $("#finish-btn").hidden = asked < 2 || state.adjusting;
   $("#explain-btn").hidden = state.adjusting;
   $("#answer-input").placeholder = state.adjusting ? "Contame qué cambiar…" : "O escribí tu respuesta…";
@@ -268,6 +268,7 @@ function card(c, recommended) {
   if (best.cuotas) sub.push(`${best.cuotas} cuotas sin interés`);
   if (best.promo && !best.cuotas) sub.push(esc(best.promo));
   const others = c.offers.slice(1);
+  const idx = cardModels.push(c) - 1;
   return `<article class="card ${recommended ? "recommended" : ""}">
     ${recommended ? `<span class="ribbon">Mi recomendación</span>` : ""}
     <h3>${esc(c.model)}</h3>
@@ -280,13 +281,44 @@ function card(c, recommended) {
     <div class="actions">
       <a class="btn btn-primary" href="${esc(best.url)}" target="_blank" rel="noopener">${best.store_name.length <= 12 ? `Ver en ${esc(best.store_name)}` : "Ver oferta"}</a>
       ${status.follow_enabled
-        ? `<button class="btn follow-btn" data-follow="${cardModels.push(c) - 1}" title="Te avisamos por Telegram cuando baje de verdad">🔔 Seguir precio</button>`
+        ? `<button class="btn follow-btn" data-follow="${idx}" title="Te avisamos por Telegram cuando baje de verdad">🔔 Seguir precio</button>`
         : `<button class="btn" disabled title="Próximamente: te avisamos cuando baje de verdad">Seguir precio</button>`}
     </div>
     <div class="follow-note" hidden></div>
+    <div class="ml-box"><button type="button" class="link-btn ml-btn" data-ml="${idx}">¿Y en Mercado Libre?</button><div class="ml-result" hidden></div></div>
     ${others.length ? `<details class="others"><summary>También en ${others.length} tienda${others.length > 1 ? "s" : ""} más</summary>
       <ul>${others.map((o) => `<li><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.store_name)}</a><span>${money.format(o.price)}</span></li>`).join("")}</ul></details>` : ""}
   </article>`;
+}
+
+/* ---------------- ¿Y en Mercado Libre? (vía ComparaYa) ---------------- */
+function bindMl() {
+  for (const b of document.querySelectorAll(".ml-btn")) {
+    b.addEventListener("click", async () => {
+      const c = cardModels[Number(b.dataset.ml)];
+      const box = b.parentElement.querySelector(".ml-result");
+      b.disabled = true; b.textContent = "Buscando en Mercado Libre…";
+      try {
+        const r = await api("/api/ml", { model: c.model, product: state.profile?.product || "", title: c.best.title || "" });
+        const line = (o, label) => `<li><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(label || o.shop)}</a>${o.intl ? ' <small>(importado)</small>' : ""}<span>${money.format(o.price)}</span></li>`;
+        let html = "";
+        if (r.ml.length) {
+          const diff = r.ml[0].price - c.best.price;
+          html += `<p><b>Mercado Libre:</b> ${money.format(r.ml[0].price)} ${diff < 0 ? `<span class="cheaper">(${money.format(-diff)} menos que ${esc(c.best.store_name)})</span>` : `<span class="muted">(${money.format(diff)} más que ${esc(c.best.store_name)})</span>`}</p><ul>${r.ml.map((o) => line(o, "Mercado Libre")).join("")}</ul>`;
+        } else if (r.found) {
+          html += `<p>ComparaYa no tiene ofertas de Mercado Libre para este modelo ahora.</p>`;
+        } else {
+          html += `<p>No encontramos este modelo en ComparaYa.</p>`;
+        }
+        if (r.others.length) html += `<p class="muted">Otras tiendas que no revisamos:</p><ul>${r.others.map((o) => line(o)).join("")}</ul>`;
+        html += `<p class="muted small">${r.found ? `Precios de <a href="${esc(r.page_url)}" target="_blank" rel="noopener">ComparaYa</a> (puede tener unas horas de atraso). ` : ""}<a href="${esc(r.search_url)}" target="_blank" rel="noopener">Buscar en Mercado Libre</a></p>`;
+        box.innerHTML = html; box.hidden = false; b.remove();
+      } catch (e) {
+        toast(e.message);
+        b.disabled = false; b.textContent = "¿Y en Mercado Libre?";
+      }
+    });
+  }
 }
 
 /* ---------------- Seguir precio ---------------- */
@@ -323,7 +355,7 @@ function renderResults() {
   cardModels = [];
   const ok = r.stores.filter((s) => s.ok).length;
   const ml = `<section class="panel"><h2>Mirá también en Mercado Libre</h2>
-      <p>Mercado Libre no permite que programas lean sus precios, así que no lo incluimos en la comparación. Te dejamos la búsqueda armada para que lo mires vos.</p>
+      <p>Mercado Libre no permite que programas lean sus precios. En cada producto, tocá <b>¿Y en Mercado Libre?</b> y lo buscamos en ComparaYa, un comparador que sí publica los precios de ML. También te dejamos la búsqueda armada:</p>
       <div class="link-list">${r.links.mercadolibre.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.query)} en Mercado Libre</a>`).join("")}</div></section>`;
   const storeStatus = `<section class="panel"><details><summary><b>Dónde buscamos</b> · ${ok} de ${r.stores.length} tiendas respondieron · ${r.counts.found} publicaciones, ${r.counts.evaluated} evaluadas</summary>
       <ul class="store-status">${r.stores.map((s) => `<li class="${s.ok ? "" : "bad"}">${s.ok ? "✓" : "✗"} ${esc(s.name)} <small>${s.ok ? `${s.found} resultado${s.found === 1 ? "" : "s"}` : esc(s.error || "sin respuesta")}</small></li>`).join("")}</ul>
@@ -339,6 +371,7 @@ function renderResults() {
     $("#back-profile").addEventListener("click", () => show("profile"));
     bindFeedback();
     bindFollow();
+    bindMl();
     return;
   }
   $("#results").innerHTML = `<div class="results-head"><h1>${esc(state.profile.product)}: tus opciones</h1>
@@ -355,6 +388,7 @@ function renderResults() {
   $("#back-profile").addEventListener("click", () => show("profile"));
   bindFeedback();
   bindFollow();
+  bindMl();
 }
 
 /* ---------------- ¿Te sirvió? ---------------- */

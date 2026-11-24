@@ -57,8 +57,9 @@ búsquedas; se cambian con `LIMIT_INTERVIEW_PER_HOUR` / `LIMIT_SEARCH_PER_HOUR`)
 te gasta el cupo gratis de Gemini. En tu PC, sin `ACCESS_CODE`, no pide nada.
 
 **Limitaciones del plan gratis:** el servidor se duerme después de 15 minutos sin uso y la primera
-visita tarda alrededor de un minuto en despertarlo. Desde Render, Comeros, DeCaba y Hardcore responden
-403 (bloquean servidores en la nube; desde tu PC andan) y Frávega sí responde. Desde GitHub Actions
+visita tarda alrededor de un minuto en despertarlo. Comeros, DeCaba y Hardcore responden 403 a los
+servidores en la nube (desde tu PC andan): están marcadas `"cloud_blocked": true` en `config/stores.json`
+y no se consultan desde Render ni GitHub Actions. Frávega sí responde desde Render. Desde GitHub Actions
 (escaneo de "Seguir precio") Frávega suele bloquear, como en el tracker. En "Dónde buscamos" se ve cuáles
 respondieron.
 
@@ -117,9 +118,13 @@ Texto libre ──► Entrevista (IA) ──► Perfil de compra ──► Tiend
                      + links a ML    (agrupado por modelo)   contra el perfil
 ```
 
-1. **Entrevista** (`core/interview.py`): la IA hace de 3 a 8 preguntas sobre el uso, nunca sobre
-   especificaciones ("¿te molesta que haga ruido?", no "¿qué switches?"). No repite lo que ya dijiste.
-   "No sé, explicame" devuelve una explicación simple y repite la pregunta. Al llegar al máximo, se
+1. **Entrevista** (`core/interview.py`): la IA primero piensa los 5 a 7 **factores de decisión** de esa
+   categoría, como un vendedor experto (monitor: uso, tamaño y resolución, Hz, plano o curvo, con qué
+   lo conecta, brazo o ajuste de altura, marca), y los recorre de a una pregunta (de 5 a 10). Las
+   decisiones técnicas se presentan con lo que cambian en la práctica y una recomendación ("Full HD,
+   más barato · 2K, texto más nítido, ideal en 27""); lo demás, por el uso ("¿te molesta que haga
+   ruido?", no "¿qué switches?"). Pregunta marca preferida y "¿algo que sí o sí quieras o no?". No
+   repite lo que ya dijiste. "No sé, explicame" explica y repite la pregunta. Al llegar al máximo, se
    fuerza el perfil.
 2. **Perfil**: cada característica trae *qué es* (en una oración que entienda cualquiera) y *por qué
    para vos* (citando lo que respondiste). Incluye la categoría, búsquedas para las tiendas, modelos
@@ -162,10 +167,17 @@ Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.js
 - Los lectores de VTEX, WooCommerce y Tiendanube, y el parser de precios en pesos (`core/price_parser.py`).
 - **No se evade ningún control anti-bot.** Si una tienda bloquea, queda informada como error.
   Frávega bloquea las IPs de servidores en la nube (GitHub Actions): desde una PC anda.
-- **Mercado Libre no se lee.** Sus términos prohíben robots y scraping, y la API cierra el acceso
-  a las apps que sólo leen precios (el tracker lo comprobó en noviembre de 2026). Tampoco se usan
-  intermediarios como Jina Reader, porque sería lo mismo. Se ofrece la búsqueda armada como link.
-  A futuro: averiguar si el programa de afiliados de ML permite mostrar precios.
+- **Mercado Libre no se lee directo.** Sus términos prohíben robots y scraping, y la API cierra el
+  acceso a las apps que sólo leen precios (el tracker lo comprobó en noviembre de 2026). Tampoco se usan
+  intermediarios como Jina Reader. En cambio, como el tracker, se usa **ComparaYa** (`core/comparaya.py`):
+  comparador afiliado de ML que publica sus precios en fichas que su robots.txt permite leer (prohíbe
+  `/api/`, su buscador, así que no se usa). La ficha se encuentra armando la dirección con tipo, marca y
+  código (`monitor-msi-mp241-24`, `mouse-logitech-g502-lightspeed`): se prueban hasta 6 variantes con
+  1,2 s de pausa y la encontrada (o "no existe") se recuerda 30/7 días en la tabla `comparaya_slugs`.
+  Sólo cuentan ofertas nuevas con todas las palabras del modelo salvo la marca. Se usa en el botón
+  **"¿Y en Mercado Libre?"** de cada resultado (muestra ML y tiendas que no leemos) y en el escaneo de
+  Seguir precio (ML sin importados entra como una tienda más). Precialo no se usa: prohíbe leer su
+  buscador.
 - Para la etapa de seguimiento se pueden traer la oferta real contra la mediana de 30 días
   (`services/market.py`), los eventos con referencias congeladas y las cuotas en pesos de hoy.
 
@@ -186,7 +198,7 @@ Sumar una tienda de esas plataformas es agregar una entrada en `config/stores.js
 ```
 app/        FastAPI (main.py) y la página (static/: index.html, app.js, styles.css)
 core/       ai (proveedores), demo, interview, stores, search, candidates, guard, feedback,
-            db, follow, telegram, market, watch, price_parser, settings
+            db, follow, telegram, market, watch, comparaya, price_parser, settings
 .github/    workflows: watch (escaneo cada 3 h) y tests
 config/     stores.json: tiendas y categorías
 tests/      pytest sin red (IA y tiendas con dobles)
