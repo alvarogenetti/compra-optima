@@ -10,8 +10,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 
@@ -27,7 +29,7 @@ veces "ficha:" con especificaciones de la ficha de la tienda, que valen tanto co
 Evaluá cada publicación contra el perfil, sólo con lo que dice el título y lo que sepas con seguridad
 de ese modelo. Español rioplatense, simple, sin tecnicismos sin explicar.
 
-Para cada publicación que SEA el producto buscado (no accesorios, repuestos ni otra cosa) devolvé:
+Para cada publicación que SEA el producto buscado devolvé:
 - "id": el id de la lista.
 - "model": marca + modelo normalizado, igual para la misma cosa en distintas tiendas
   ("Logitech G305", no "Mouse Gamer Logitech G305 Lightspeed Negro"). Si el título trae un código de
@@ -55,11 +57,12 @@ superior" lo cumplen i5/Core Ultra 5/Ryzen AI 5 y gamas mayores. Lo mismo al rev
 Una placa de video mayor cumple "o superior" (RTX 4060 cumple "RTX 4050 o superior"; RTX 5050 también).
 NUNCA digas "es la única", "no hay otra" ni "no existe": sólo ves una parte de las publicaciones.
 
-Devolvé TODAS las publicaciones que son el producto buscado, aunque no cumplan (con puntaje bajo y
-"fails_must"): la persona quiere ver también las que casi cumplen. Sólo omití las que NO son el producto
-(accesorios, repuestos, otra cosa).
+Devolvé UN elemento por CADA publicación de la lista (el mismo id), sin saltear ninguna: la persona quiere
+ver también las que casi cumplen. Si la publicación NO es el producto (accesorio, repuesto, otra cosa), su
+elemento es sólo {"id": n, "product": false}. Si es el producto pero el puntaje es MENOR A 30, devolvé
+sólo "id", "model", "score" y "fails_must" (sin "meets", "doubts" ni "reason"): ahorra salida.
 
-Respondé SÓLO JSON: {"items": [{"id": 0, "model": "", "score": 0, "fails_must": [], "fix": null, "meets": [], "doubts": [], "reason": ""}]}"""
+Respondé SÓLO JSON: {"items": [{"id": 0, "model": "", "score": 0, "fails_must": [], "fix": null, "meets": [], "doubts": [], "reason": ""}, {"id": 1, "product": false}]}"""
 FAIL_CAP = 40   # si contradice un obligatorio, como mucho "casi cumple"
 
 TIERS = [
@@ -198,58 +201,130 @@ EVAL_BATCH = 30      # publicaciones por pedido: con muchas juntas la IA devuelv
 EVAL_PARALLEL = 5
 
 
+EVAL_CACHE_TTL_S = 6 * 3600
+EVAL_CACHE_MAX = 5000
+_eval_cache: dict[str, tuple[float, dict]] = {}     # clave -> (cuándo, campos de la evaluación)
+_EVAL_FIELDS = ("model", "score", "fix", "meets", "doubts", "reason", "rejected")
+
+
+def _cache_key(profile: dict, listing: dict) -> str:
+    """La evaluación depende de la persona (perfil) y de lo que dice la publicación (título y ficha); no
+    del precio ni de la tienda: la misma publicación en otra tienda comparte evaluación."""
+    raw = profile_text(profile) + "|" + title_key(listing["title"]) + "|" + (listing.get("specs") or "")
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str) -> dict | None:
+    hit = _eval_cache.get(key)
+    if hit and time.time() - hit[0] < EVAL_CACHE_TTL_S:
+        return hit[1]
+    return None
+
+
+def _cache_put(key: str, e: dict) -> None:
+    if len(_eval_cache) >= EVAL_CACHE_MAX:
+        for k in sorted(_eval_cache, key=lambda k: _eval_cache[k][0])[:EVAL_CACHE_MAX // 10]:
+            del _eval_cache[k]
+    _eval_cache[key] = (time.time(), {k: e[k] for k in _EVAL_FIELDS if k in e})
+
+
 def evaluate(listings: list[dict], profile: dict) -> list[dict]:
-    """Evalúa en tandas en paralelo (respuestas más completas y más rápidas que un pedido gigante)."""
+    """Evalúa las publicaciones. Ahorra tokens de dos maneras:
+    - CACHÉ (6 h): lo ya evaluado para este perfil no se vuelve a pedir (reintentos, cambio de código
+      postal, segundo clic en "Buscar precios").
+    - Tandas en paralelo (respuestas más completas y más rápidas que un pedido gigante)."""
     if not listings:
         return []
-    batches = [listings[i:i + EVAL_BATCH] for i in range(0, len(listings), EVAL_BATCH)]
+    cached, todo = [], []
+    for x in listings:
+        hit = _cache_get(_cache_key(profile, x))
+        if hit is None:
+            todo.append(x)
+        elif not hit.get("rejected"):       # (los descartados por no ser el producto también se recuerdan)
+            cached.append({**x, **hit})
+    if cached:
+        log.info("evaluación: %d de %d salieron de la caché", len(cached), len(listings))
+    if not todo:
+        return cached
+    batches = [todo[i:i + EVAL_BATCH] for i in range(0, len(todo), EVAL_BATCH)]
+    rejected: list[dict] = []
     if len(batches) == 1:
-        return evaluate_batch(batches[0], profile)
-    out: list[dict] = []
-    errors = []
-    with ThreadPoolExecutor(max_workers=EVAL_PARALLEL) as ex:
-        futures = [ex.submit(evaluate_batch, b, profile) for b in batches]
-        for f in futures:
-            try:
-                out += f.result()
-            except AIError as e:   # una tanda que falla no tira las demás
-                errors.append(e)
-    if errors and not out:
-        raise errors[0]
-    return out
+        fresh = evaluate_batch(batches[0], profile, rejected=rejected)
+    else:
+        fresh, errors = [], []
+        with ThreadPoolExecutor(max_workers=EVAL_PARALLEL) as ex:
+            futures = [ex.submit(evaluate_batch, b, profile, True, rejected) for b in batches]
+            for f in futures:
+                try:
+                    fresh += f.result()
+                except AIError as e:   # una tanda que falla no tira las demás
+                    errors.append(e)
+        if errors and not fresh and not cached:
+            raise errors[0]
+    for e in fresh:
+        _cache_put(_cache_key(profile, e), e)
+    for x in rejected:
+        _cache_put(_cache_key(profile, x), {"rejected": True})
+    return cached + fresh
 
 
 MIN_SPLIT = 8
 
 
-def evaluate_batch(listings: list[dict], profile: dict) -> list[dict]:
-    """Evalúa una tanda. Si la IA no puede con tantas juntas (Groq rechaza respuestas largas), se
-    divide en mitades y se evalúa cada una."""
+RETRY_CHUNK = 10
+
+
+def evaluate_batch(listings: list[dict], profile: dict, retry: bool = True,
+                   rejected: list[dict] | None = None) -> list[dict]:
+    """Evalúa una tanda, con dos protecciones:
+    - Si la IA no puede con tantas juntas (Groq rechaza respuestas largas), se divide en mitades.
+    - Si la respuesta viene INCOMPLETA (medido: modelos Flash Lite que contestan 2 de 30 o 0), se
+      vuelve a pedir sólo lo que faltó, en tandas chicas. Cada publicación tiene que quedar respondida
+      (como evaluada o como "no es el producto"); si no, una notebook buena puede perderse sin aviso."""
     try:
-        return _evaluate_once(listings, profile)
+        out, missing, no_product = _evaluate_once(listings, profile)
     except AIError:
         if len(listings) <= MIN_SPLIT:
             raise
         half = len(listings) // 2
-        return evaluate_batch(listings[:half], profile) + evaluate_batch(listings[half:], profile)
+        return (evaluate_batch(listings[:half], profile, retry, rejected)
+                + evaluate_batch(listings[half:], profile, retry, rejected))
+    if rejected is not None:
+        rejected.extend(no_product)
+    if missing and retry:
+        log.info("evaluación incompleta: faltaron %d de %d; se pide de nuevo sólo eso", len(missing), len(listings))
+        for k in range(0, len(missing), RETRY_CHUNK):
+            try:
+                out += evaluate_batch(missing[k:k + RETRY_CHUNK], profile, retry=False, rejected=rejected)
+            except AIError as e:
+                log.info("no se pudo completar la evaluación: %s", e)
+    return out
 
 
-def _evaluate_once(listings: list[dict], profile: dict) -> list[dict]:
-    """Pide a la IA la evaluación de una tanda y la cruza con las publicaciones (por id)."""
+def _evaluate_once(listings: list[dict], profile: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """Una consulta a la IA para una tanda. Devuelve (evaluadas, sin respuesta, descartadas por no ser
+    el producto)."""
     lines = "\n".join((f"{i} | {x['title']} | ${x['price']:,.0f} | {x['store_name']}".replace(",", ".")
                        + (f" | ficha: {x['specs']}" if x.get("specs") else ""))
                       for i, x in enumerate(listings))
     raw = get_ai().json(EVAL_SYSTEM, [{"role": "user", "content":
                                        f"PERFIL\n{profile_text(profile)}\n\nPUBLICACIONES\n{lines}"}],
                         task="evaluate")
-    out = []
+    out, answered, rejected = [], set(), []
     for it in raw.get("items") or []:
         try:
             i = int(it.get("id"))
-            score = max(0, min(100, int(float(it.get("score") or 0))))
         except (TypeError, ValueError):
             continue
         if not 0 <= i < len(listings):
+            continue
+        answered.add(i)
+        if it.get("product") is False:
+            rejected.append(listings[i])    # respondida: no es el producto (accesorio, repuesto...); no se muestra
+            continue
+        try:
+            score = max(0, min(100, int(float(it.get("score") or 0))))
+        except (TypeError, ValueError):
             continue
         fails = [str(f)[:80] for f in (it.get("fails_must") or []) if str(f).strip()][:3]
         doubts = [str(d)[:120] for d in (it.get("doubts") or [])][:2]
@@ -275,7 +350,8 @@ def _evaluate_once(listings: list[dict], profile: dict) -> list[dict]:
                     "meets": [str(m)[:120] for m in (it.get("meets") or [])][:3],
                     "doubts": doubts,
                     "reason": str(it.get("reason") or "")[:300]})
-    return out
+    missing = [x for i, x in enumerate(listings) if i not in answered]
+    return out, missing, rejected
 
 
 def model_key(name: str) -> str:

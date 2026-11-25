@@ -70,6 +70,20 @@ comparaya_slugs = Table(
 )
 
 
+ai_usage = Table(
+    "ai_usage", meta,   # una fila por consulta a la IA: tokens reales y estado (core/usage.py)
+    Column("id", Integer, primary_key=True),
+    Column("ts", DateTime(timezone=True), nullable=False, index=True),
+    Column("provider", String(20), nullable=False),
+    Column("model", String(80), nullable=False),
+    Column("task", String(20), nullable=False),
+    Column("prompt", Integer, nullable=False, default=0),
+    Column("output", Integer, nullable=False, default=0),
+    Column("thoughts", Integer, default=0),
+    Column("status", String(12), nullable=False),
+    Column("ms", Integer, default=0),
+)
+
 model_specs = Table(
     "model_specs", meta,   # ficha del fabricante por modelo (core/specs.py), con fuentes
     Column("model_key", String(120), primary_key=True),

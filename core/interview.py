@@ -14,7 +14,10 @@ import json
 from core import settings, stores
 from core.ai import AIError, get_ai
 
-SYSTEM = """Sos el asesor de compras de "Compra Óptima", una web argentina. Ayudás a gente que NO sabe
+# El prompt va en dos partes para ahorrar tokens (ver docs/AI.md): la de PREGUNTAS se manda siempre; la del
+# PERFIL (~1.400 tokens, más de la mitad) sólo cuando ya se puede cerrar la entrevista. En los primeros
+# MIN_QUESTIONS turnos el perfil no está permitido, así que no se manda.
+SYSTEM_QUESTIONS = """Sos el asesor de compras de "Compra Óptima", una web argentina. Ayudás a gente que NO sabe
 de tecnología a elegir el producto ideal para su uso y después a encontrarlo al mejor precio.
 Hablás en español rioplatense (vos), cálido, claro y breve.
 
@@ -55,7 +58,14 @@ CÓMO ENTREVISTAR
 - "draft" es la lista de lo que ya sabés, en etiquetas cortas para mostrar en pantalla
   (ej: {{"label": "Uso", "value": "Juegos y trabajo"}}). Actualizala en cada turno.
 - Si lo que escriben no es algo para comprar, explicá amablemente qué hacés y preguntá qué quieren comprar.
+"""
 
+QUESTION_FORMAT = """
+FORMATO: respondé SÓLO un objeto JSON, sin texto alrededor:
+{{"type": "question", "explanation": "", "question": "...", "help": "...", "options": ["..."],
+  "multi": false, "draft": [{{"label": "...", "value": "..."}}]}}"""
+
+SYSTEM_PROFILE = """
 CUÁNDO TERMINAR
 Cuando ya sepas lo suficiente (o la persona pida ver resultados), devolvé el perfil (type "profile").
 
@@ -114,8 +124,14 @@ WANTS_RESULTS = ("(Mensaje del sistema: la persona quiere ver resultados ya. "
                  "Devolvé el perfil con lo que sabés.)")
 
 
-def system_prompt() -> str:
-    return SYSTEM.format(max_q=settings.MAX_QUESTIONS, categories=stores.load().category_prompt())
+SYSTEM = SYSTEM_QUESTIONS + SYSTEM_PROFILE      # el prompt completo
+
+
+def system_prompt(allow_profile: bool = True) -> str:
+    """allow_profile=False: sólo preguntas (~1.200 tokens). True: completo (~2.600), para cuando la
+    entrevista puede terminar."""
+    text = SYSTEM if allow_profile else SYSTEM_QUESTIONS + QUESTION_FORMAT
+    return text.format(max_q=settings.MAX_QUESTIONS, categories=stores.load().category_prompt())
 
 
 def count_questions(conversation: list[dict]) -> int:
@@ -143,10 +159,15 @@ def step(conversation: list[dict], finish: bool = False) -> dict:
     force = finish or asked >= settings.MAX_QUESTIONS
     if force:
         conv = conv + [{"role": "user", "content": WANTS_RESULTS if finish else FORCE_PROFILE}]
-    out = normalize(get_ai().json(system_prompt(), conv, task="interview"))
-    if out["type"] == "profile" and not force and asked < settings.MIN_QUESTIONS:
-        # Cerró demasiado rápido (pasa cuando el primer mensaje es muy detallado): una pregunta más
-        out = normalize(get_ai().json(system_prompt(), conv + [{"role": "user", "content": TOO_SOON}],
+    # En los primeros turnos el perfil no está permitido: se manda el prompt corto, sin esa parte
+    can_close = force or asked >= settings.MIN_QUESTIONS
+    # Tarea "interview" = sólo preguntas (prompt corto, pedido chico: puede ir a una IA rápida y chica);
+    # tarea "profile" = el turno que puede cerrar con el perfil (la calidad pesa más): ver docs/AI.md
+    task = "profile" if can_close else "interview"
+    out = normalize(get_ai().json(system_prompt(can_close), conv, task=task))
+    if out["type"] == "profile" and not can_close:
+        # Cerró igual (pasa cuando el primer mensaje es muy detallado): una pregunta más
+        out = normalize(get_ai().json(system_prompt(False), conv + [{"role": "user", "content": TOO_SOON}],
                                       task="interview"))
     if force and out["type"] != "profile":
         raise AIError("La IA no pudo armar el perfil. Probá de nuevo.")

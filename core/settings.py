@@ -29,6 +29,21 @@ def ai_chain() -> list[str]:
     return [x.strip().lower() for x in raw.split(",") if x.strip()]
 
 
+# Orden de preferencia de las IA por tarea (ver docs/AI.md): la entrevista son pedidos chicos y
+# frecuentes; la evaluación, pocos y grandes. Se cambia con AI_ROUTE_INTERVIEW / AI_ROUTE_EVALUATE.
+DEFAULT_ROUTES = {"interview": ["groq", "gemini", "openrouter"],
+                  "profile": ["gemini", "groq", "openrouter"],
+                  "evaluate": ["gemini", "groq", "openrouter"]}
+
+
+def ai_routes() -> dict[str, list[str]]:
+    routes = {}
+    for task, default in DEFAULT_ROUTES.items():
+        raw = os.getenv(f"AI_ROUTE_{task.upper()}")
+        routes[task] = [x.strip().lower() for x in raw.split(",") if x.strip()] if raw else list(default)
+    return routes
+
+
 def ai_names() -> list[str]:
     keys = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "cerebras": "CEREBRAS_API_KEY",
             "openrouter": "OPENROUTER_API_KEY"}

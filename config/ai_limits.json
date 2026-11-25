@@ -1,0 +1,12 @@
+{
+  "_nota": "Límites del plan GRATIS de cada IA, por modelo. Los usa core/usage.py para no gastar una consulta que seguro daría 429 y para repartir el trabajo. Primer patrón que coincide gana (fnmatch). rpm = consultas por minuto, tpm = tokens por minuto (entrada + salida), rpd = consultas por día; null = sin dato. Fuentes: Gemini = AI Studio > Límite de frecuencia del proyecto (25/11/2026); Groq = cabeceras x-ratelimit-* de la API (25/11/2026). OpenRouter = de memoria, SIN VERIFICAR: ajustar con los valores reales de la cuenta. Si cambian, se editan acá y no hace falta tocar código.",
+  "margin": 0.85,
+  "limits": [
+    {"provider": "gemini", "model": "gemini-*flash-lite*", "rpm": 15, "tpm": 250000, "rpd": 500},
+    {"provider": "gemini", "model": "gemini-*flash*", "rpm": 5, "tpm": 250000, "rpd": 20},
+    {"provider": "gemini", "model": "*", "rpm": 5, "tpm": 250000, "rpd": 20},
+    {"provider": "groq", "model": "*", "rpm": 30, "tpm": 8000, "rpd": 1000},
+    {"provider": "openrouter", "model": "*", "rpm": 20, "tpm": null, "rpd": 50},
+    {"provider": "cerebras", "model": "*", "rpm": 30, "tpm": null, "rpd": null}
+  ]
+}

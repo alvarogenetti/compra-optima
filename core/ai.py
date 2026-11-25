@@ -17,7 +17,7 @@ from typing import Protocol
 
 import httpx
 
-from core import settings
+from core import settings, usage
 
 log = logging.getLogger("ai")
 
@@ -25,7 +25,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:ge
 GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 # Cuánto esperar a un modelo antes de pasar al siguiente: una pregunta tarda 2-5 s; la evaluación
 # de candidatos manda mucho texto y puede tardar más.
-TIMEOUTS = {"interview": 20, "evaluate": 60}
+TIMEOUTS = {"interview": 20, "profile": 40, "evaluate": 60}
 RETRIES = 1          # por modelo; después se pasa al siguiente de la lista
 RETRY_WAIT_S = 1.5
 
@@ -87,16 +87,22 @@ class GeminiAI:
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1 if task == "evaluate" else 0.4},
         }
         r, failures = None, []
-        available = [m for m in self.models if not _cooling(m)]
+        est = usage.estimate_call(system, messages, task)
+        no_quota = [m for m in self.models if not _cooling(m) and not usage.ledger.fits("gemini", m, est)]
+        available = [m for m in self.models if not _cooling(m) and m not in no_quota]
         for model in available:
             gc = dict(body["generationConfig"])
             if model.startswith("gemini-3"):
                 # Razonamiento corto: de ~3,5 s a ~2 s por pregunta, con la misma calidad en la entrevista
                 gc["thinkingConfig"] = {"thinkingLevel": "low"}
+            started = time.time()
             r = self._post(model, {**body, "generationConfig": gc}, TIMEOUTS.get(task, 30))
+            ms = int((time.time() - started) * 1000)
             if r is not None and r.status_code not in (404, 429, 500, 503):
                 self.model = model
+                self._usage = (model, task, ms)
                 break
+            usage.ledger.record("gemini", model, task, 0, 0, "timeout" if r is None else r.status_code, ms)
             failures.append(f"{model}: {'sin respuesta' if r is None else 'HTTP %d' % r.status_code}")
             _cool_down(model, r)
             log.info("Gemini %s no disponible, pruebo el siguiente", failures[-1])
@@ -107,7 +113,10 @@ class GeminiAI:
                               f"Disponibles: {self._flash_models()}")
             wait = _seconds_until_free(self.models)
             when = f"en {wait} segundos" if wait < 90 else f"en {wait // 60 + 1} minutos"
-            limited = "HTTP 429" in codes or (not failures and any(_cool_reason.get(m) == 429 for m in self.models))
+            limited = ("HTTP 429" in codes or bool(no_quota)
+                       or (not failures and any(_cool_reason.get(m) == 429 for m in self.models)))
+            if no_quota and not failures:
+                wait = max(wait, 30)
             if limited:
                 raise AIError(f"Llegamos al límite gratis de la IA por ahora (muchas consultas juntas). "
                               f"Probá de nuevo {when}.")
@@ -118,6 +127,10 @@ class GeminiAI:
         if r.status_code != 200:
             raise AIError(f"Gemini respondió HTTP {r.status_code}. {_err_detail(r)}")
         data = r.json()
+        um = data.get("usageMetadata") or {}
+        model, task_, ms = self._usage
+        usage.ledger.record("gemini", model, task_, um.get("promptTokenCount", 0), um.get("candidatesTokenCount", 0),
+                            200, ms, um.get("thoughtsTokenCount", 0))
         try:
             text = "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
         except (KeyError, IndexError):
@@ -225,9 +238,15 @@ class OpenAICompatAI:
         msgs = [{"role": "system", "content": system}] + [
             {"role": "assistant" if m["role"] == "assistant" else "user", "content": m["content"]} for m in messages]
         failures = []
+        est = usage.estimate_call(system, messages, task)
+        skipped = []
         for model in [m for m in self.models if not _cooling(f"{self.name}:{m}")]:
+            if not usage.ledger.fits(self.name, model, est):
+                skipped.append(model)       # no entra en lo que le queda: ni se intenta
+                continue
             body = {"model": model, "messages": msgs, "temperature": 0.1 if task == "evaluate" else 0.4,
                     "response_format": {"type": "json_object"}}
+            started = time.time()
             try:
                 r = self.client.post(f"{self.base_url}/chat/completions", json=body, timeout=TIMEOUTS.get(task, 30),
                                      headers={"Authorization": f"Bearer {self.key}"})
@@ -238,9 +257,14 @@ class OpenAICompatAI:
                                          headers={"Authorization": f"Bearer {self.key}"})
             except httpx.HTTPError:
                 r = None
+            ms = int((time.time() - started) * 1000)
             if r is not None and r.status_code == 200:
                 try:
-                    text = r.json()["choices"][0]["message"]["content"] or ""
+                    data = r.json()
+                    u = data.get("usage") or {}
+                    usage.ledger.record(self.name, model, task, u.get("prompt_tokens", 0),
+                                        u.get("completion_tokens", 0), 200, ms)
+                    text = data["choices"][0]["message"]["content"] or ""
                     out = parse_json_text(text)
                     self.model = model
                     return out
@@ -248,6 +272,7 @@ class OpenAICompatAI:
                     failures.append(f"{model}: respuesta inválida")
                     continue
             code = None if r is None else r.status_code
+            usage.ledger.record(self.name, model, task, 0, 0, "timeout" if code is None else code, ms)
             failures.append(f"{model}: {'sin respuesta' if r is None else 'HTTP %d' % code}")
             if code in (401, 403):
                 raise AIError(f"{self.name} rechazó la clave (HTTP {code}).")
@@ -263,20 +288,40 @@ class OpenAICompatAI:
             if code != 404:
                 _cooldown[f"{self.name}:{model}"] = time.time() + secs
                 _cool_reason[f"{self.name}:{model}"] = 429 if code == 429 else 503
+        if skipped and not failures:
+            raise AIError(f"{self.name} sin cuota para este pedido por ahora ({', '.join(skipped)}).")
         raise AIError(f"{self.name} no disponible ahora ({'; '.join(failures) or 'todos en pausa'}).")
 
 
 class ChainAI:
-    """Varias IA en cadena: si una está sin cupo o falla, se usa la siguiente."""
+    """Reparte el trabajo entre varias IA y cubre las caídas.
 
-    def __init__(self, providers: list):
+    1. RUTA POR TAREA: cada tarea tiene su orden de preferencia (settings.ai_routes): la entrevista, de
+       pedidos chicos y frecuentes, va primero a Groq (rápido, cuota propia); la evaluación, de pedidos
+       grandes, va primero a Gemini (250.000 tokens por minuto contra los 8.000 de Groq).
+    2. SALUD: la IA que viene fallando (menos de la mitad de aciertos en los últimos 10 minutos) pasa al
+       final del orden, sin sacarla.
+    3. CUOTA: cada IA se salta sola los modelos que no tienen cuota libre para ese pedido (core/usage.py).
+    4. CAÍDA: si una IA falla o no tiene cuota, se prueba la siguiente.
+    """
+
+    def __init__(self, providers: list, routes: dict[str, list[str]] | None = None):
         self.providers = providers
+        self.routes = routes if routes is not None else settings.ai_routes()
         self.name = " + ".join(p.name for p in providers)
         self.model = ""
 
+    def order(self, task: str) -> list:
+        """Las IA en el orden en que conviene probarlas para esta tarea."""
+        pref = self.routes.get(task) or []
+        ranked = [p for n in pref for p in self.providers if p.name == n]
+        ranked += [p for p in self.providers if p not in ranked]
+        # sort estable: las sanas conservan su orden y las enfermas pasan atrás
+        return sorted(ranked, key=lambda p: usage.ledger.health(p.name) < usage.HEALTH_MIN)
+
     def json(self, system: str, messages: list[dict], task: str) -> dict:
         errors = []
-        for p in self.providers:
+        for p in self.order(task):
             try:
                 out = p.json(system, messages, task)
                 self.model = f"{p.name}:{getattr(p, 'model', '')}"

@@ -23,7 +23,7 @@ class FakeAI:
 
     def json(self, system, messages, task):
         self.calls.append((task, messages))
-        r = self.by_task[task]
+        r = self.by_task[task] if task in self.by_task else self.by_task["interview"]   # "profile" usa lo de la entrevista
         return r(messages) if callable(r) else r
 
 

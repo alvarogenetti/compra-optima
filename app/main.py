@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from core import (candidates, comparaya, db, feedback, follow, guard, interview, search, settings, stores,
-                  telegram)
+                  telegram, usage)
 from core.ai import AIError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -107,6 +107,14 @@ def status():
             "code_required": bool(settings.access_code()),
             "follow_enabled": follow_enabled(),
             "categories": {k: v["label"] for k, v in reg.categories.items()}}
+
+
+@app.get("/api/usage")
+def ai_usage(request: Request):
+    """Consumo de IA desde que arrancó el servidor: tokens promedio por tarea y modelo, cuota usada contra
+    el límite gratis de cada uno y consultas fallidas. Pide el código de acceso (si está configurado)."""
+    guard.check_code(request.headers.get("x-access-code"))
+    return usage.ledger.summary()
 
 
 @app.post("/api/check-code")
