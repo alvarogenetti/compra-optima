@@ -25,13 +25,25 @@ Crea el entorno la primera vez, copia `.env.example` a `.env` y abre http://127.
   la interfaz y la búsqueda en tiendas, pero los resultados traen cosas que no son el producto
   (sin IA no hay quien las filtre).
 
-`GEMINI_MODEL` es una lista en orden de preferencia: primero `gemini-3-flash-preview` (unos 2 s por
-pregunta), después los "lite" (3-4 s) y al final `gemini-3.5-flash` (anda, pero tarda 10-18 s) y
-`gemini-flash-latest`. **Cada modelo tiene su propio cupo gratis**, así que con varios en la lista se
-aguanta mucho más. Si uno responde 429 (límite por minuto o por día), la app lo saltea el tiempo que
-indica Google (retryDelay; una hora si es el cupo diario) y usa el siguiente sin perder tiempo; si
-responde 503 (saturado), lo saltea 30 s. Si están todos en pausa, el mensaje dice en cuánto probar.
-La búsqueda con evaluación tarda unos 25 s.
+**Límites del plan gratis de Gemini** (vistos en AI Studio → Límite de frecuencia, noviembre 2026;
+son por proyecto, no por clave, y el diario se reinicia a la medianoche de California = 5 AM en
+Argentina):
+
+| Modelo | Por minuto | Por día |
+|---|---|---|
+| Gemini 3.1 Flash Lite / 3.5 Flash Lite | 15 | 500 |
+| Gemini 3 Flash / 3.6 / 3.8 Flash | 5 | 20 |
+
+Una búsqueda completa usa unas 10 consultas (entrevista + evaluación en tandas), así que
+`GEMINI_MODEL` pone primero los **Flash Lite** y deja los Flash de respaldo. Si un modelo responde 429
+se saltea el tiempo que indica Google (retryDelay, o una hora si es el cupo diario); con 503, 30 s.
+
+**Varias IA gratis en cadena** (`core/ai.py`, `ChainAI`): además de Gemini, la app usa **Groq**,
+**Cerebras** y **OpenRouter** (API tipo OpenAI, `OpenAICompatAI`) si tienen clave (`GROQ_API_KEY`,
+`CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`). Se prueban en el orden de `AI_CHAIN` (por defecto gemini,
+groq, cerebras, openrouter): si una está sin cupo o falla, se usa la siguiente. Cada una tiene su lista
+de modelos (`GROQ_MODELS`, etc.) con la misma lógica de pausas. La insignia de arriba a la derecha
+muestra cuáles están activas.
 
 El plan gratis de Gemini tiene límites por minuto y por día, y Google puede usar lo que se le manda
 para mejorar sus modelos. Para una prueba chica alcanza; antes de abrirlo a más gente, conviene

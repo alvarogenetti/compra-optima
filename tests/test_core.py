@@ -608,3 +608,48 @@ def test_mismas_publicaciones_en_otras_tiendas_heredan_la_evaluacion():
     out = candidates.add_siblings(ev, [a, b])
     assert [(x["store"], x["model"], x["score"]) for x in out] == [("oncity", "Lenovo LOQ 15ARP11", 40),
                                                                   ("provincia", "Lenovo LOQ 15ARP11", 40)]
+
+
+# ------------------------------------------------------------------ varias IA en cadena
+def test_openai_compat_y_cadena(monkeypatch):
+    from core import ai as ai_mod
+    monkeypatch.setattr(ai_mod, "_cooldown", {})
+    monkeypatch.setattr(ai_mod, "_cool_reason", {})
+    pedidos = []
+
+    def groq(req):
+        body = json.loads(req.content)
+        pedidos.append(("groq", body["model"]))
+        assert req.headers["authorization"] == "Bearer g" and body["messages"][0]["role"] == "system"
+        if body["model"] == "lleno":
+            return httpx.Response(429, headers={"retry-after": "30"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": "groq"}'}}]})
+
+    g = ai_mod.OpenAICompatAI("groq", "https://api.groq.com/openai/v1", "g", ["lleno", "bueno"],
+                              httpx.Client(transport=httpx.MockTransport(groq)))
+    assert g.json("sys", [{"role": "user", "content": "x"}], "interview") == {"ok": "groq"}
+    assert g.json("sys", [{"role": "user", "content": "x"}], "interview") == {"ok": "groq"}
+    assert pedidos == [("groq", "lleno"), ("groq", "bueno"), ("groq", "bueno")]   # "lleno" en pausa
+
+    class SinCupo:
+        name = "gemini"
+        def json(self, *a, **k):
+            raise AIError("Llegamos al límite gratis")
+    chain = ai_mod.ChainAI([SinCupo(), g])
+    assert chain.json("sys", [{"role": "user", "content": "x"}], "evaluate") == {"ok": "groq"}
+    assert chain.model == "groq:bueno" and chain.name == "gemini + groq"
+
+
+def test_cadena_arma_las_ia_con_clave(monkeypatch):
+    from core import ai as ai_mod
+    for k in ("GEMINI_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY", "AI_PROVIDER", "AI_CHAIN"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "y")
+    assert [p.name for p in ai_mod.configured_providers()] == ["gemini", "openrouter"]
+    assert settings.ai_names() == ["gemini", "openrouter"] and settings.ai_provider() == "ia"
+    monkeypatch.setenv("AI_CHAIN", "openrouter,gemini")
+    assert [p.name for p in ai_mod.configured_providers()] == ["openrouter", "gemini"]
+    monkeypatch.delenv("GEMINI_API_KEY")
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert settings.ai_provider() == "demo"

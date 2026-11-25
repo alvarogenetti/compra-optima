@@ -100,8 +100,9 @@ def index():
 def status():
     reg = stores.load()
     provider = settings.ai_provider()
-    return {"provider": provider,
-            "model": settings.gemini_model().split(",")[0] if provider == "gemini" else None,
+    names = settings.ai_names() if provider != "demo" else []
+    return {"provider": " + ".join(names) if names else provider,
+            "ais": names,
             "stores": len(reg.stores),
             "code_required": bool(settings.access_code()),
             "follow_enabled": follow_enabled(),

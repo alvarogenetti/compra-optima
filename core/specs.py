@@ -45,7 +45,7 @@ def _key(model: str) -> str:
 
 
 def available() -> bool:
-    return bool(settings.gemini_key()) and settings.ai_provider() == "gemini" and time.time() >= _unavailable_until
+    return bool(settings.gemini_key()) and settings.ai_provider() != "demo" and time.time() >= _unavailable_until
 
 
 def _cache_get(key: str) -> dict | None:

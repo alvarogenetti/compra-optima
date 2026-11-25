@@ -9,6 +9,7 @@ Cambiar de proveedor (Gemini gratis hoy, otro pago mañana) es agregar una clase
 from __future__ import annotations
 
 import json
+import os
 import logging
 import re
 import time
@@ -197,6 +198,109 @@ def set_ai(ai: AI | None) -> None:
     _override = ai
 
 
+# ------------------------------------------------------------------ otras IA gratis (API tipo OpenAI)
+# Proveedores con plan gratis y API compatible con la de OpenAI: con una clave cada uno, la app los usa
+# en cadena. (url base, variable de la clave, variable de los modelos, modelos por defecto)
+OPENAI_COMPAT = {
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "GROQ_MODELS",
+             "openai/gpt-oss-120b,llama-3.3-70b-versatile,openai/gpt-oss-20b"),
+    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "CEREBRAS_MODELS",
+                 "gpt-oss-120b,llama-3.3-70b,qwen-3-32b"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "OPENROUTER_MODELS",
+                   "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-chat-v3.1:free"),
+}
+
+
+class OpenAICompatAI:
+    """Groq, Cerebras, OpenRouter...: /chat/completions con respuesta en JSON. Misma lógica que Gemini:
+    varios modelos en orden y los que dan 429 o fallan se saltean un rato."""
+
+    def __init__(self, name: str, base_url: str, key: str, models: list[str], client: httpx.Client | None = None):
+        self.name, self.base_url, self.key = name, base_url.rstrip("/"), key
+        self.models = models
+        self.model = models[0] if models else ""
+        self.client = client or httpx.Client(timeout=60)
+
+    def json(self, system: str, messages: list[dict], task: str) -> dict:
+        msgs = [{"role": "system", "content": system}] + [
+            {"role": "assistant" if m["role"] == "assistant" else "user", "content": m["content"]} for m in messages]
+        failures = []
+        for model in [m for m in self.models if not _cooling(f"{self.name}:{m}")]:
+            body = {"model": model, "messages": msgs, "temperature": 0.1 if task == "evaluate" else 0.4,
+                    "response_format": {"type": "json_object"}}
+            try:
+                r = self.client.post(f"{self.base_url}/chat/completions", json=body, timeout=TIMEOUTS.get(task, 30),
+                                     headers={"Authorization": f"Bearer {self.key}"})
+                if r.status_code == 400 and "response_format" in r.text:
+                    # Modelo sin modo JSON: se pide igual y se rescata el JSON del texto
+                    body.pop("response_format")
+                    r = self.client.post(f"{self.base_url}/chat/completions", json=body, timeout=TIMEOUTS.get(task, 30),
+                                         headers={"Authorization": f"Bearer {self.key}"})
+            except httpx.HTTPError:
+                r = None
+            if r is not None and r.status_code == 200:
+                try:
+                    text = r.json()["choices"][0]["message"]["content"] or ""
+                    out = parse_json_text(text)
+                    self.model = model
+                    return out
+                except (KeyError, IndexError, ValueError, AIError):
+                    failures.append(f"{model}: respuesta inválida")
+                    continue
+            code = None if r is None else r.status_code
+            failures.append(f"{model}: {'sin respuesta' if r is None else 'HTTP %d' % code}")
+            if code in (401, 403):
+                raise AIError(f"{self.name} rechazó la clave (HTTP {code}).")
+            secs = COOL_BUSY_S
+            if code == 429:
+                try:
+                    secs = float(r.headers.get("retry-after") or COOL_DEFAULT_S) + 1
+                except ValueError:
+                    secs = COOL_DEFAULT_S
+            if code != 404:
+                _cooldown[f"{self.name}:{model}"] = time.time() + secs
+                _cool_reason[f"{self.name}:{model}"] = 429 if code == 429 else 503
+        raise AIError(f"{self.name} no disponible ahora ({'; '.join(failures) or 'todos en pausa'}).")
+
+
+class ChainAI:
+    """Varias IA en cadena: si una está sin cupo o falla, se usa la siguiente."""
+
+    def __init__(self, providers: list):
+        self.providers = providers
+        self.name = " + ".join(p.name for p in providers)
+        self.model = ""
+
+    def json(self, system: str, messages: list[dict], task: str) -> dict:
+        errors = []
+        for p in self.providers:
+            try:
+                out = p.json(system, messages, task)
+                self.model = f"{p.name}:{getattr(p, 'model', '')}"
+                return out
+            except AIError as e:
+                errors.append(e)
+                log.info("%s sin respuesta, pruebo la siguiente IA: %s", p.name, e)
+        if len(errors) == 1:
+            raise errors[0]
+        raise AIError("Todas las IA están sin cupo o saturadas en este momento. Probá de nuevo en un rato.")
+
+
+def configured_providers(client: httpx.Client | None = None) -> list:
+    """Las IA con clave, en el orden de AI_CHAIN (por defecto gemini, groq, cerebras, openrouter)."""
+    out = []
+    for name in settings.ai_chain():
+        if name == "gemini" and settings.gemini_key():
+            out.append(GeminiAI(settings.gemini_key(), settings.gemini_model(), client))
+        elif name in OPENAI_COMPAT:
+            base, key_env, models_env, default = OPENAI_COMPAT[name]
+            key = (os.getenv(key_env) or "").strip()
+            if key:
+                models = [m.strip() for m in (os.getenv(models_env) or default).split(",") if m.strip()]
+                out.append(OpenAICompatAI(name, base, key, models, client))
+    return out
+
+
 def get_ai() -> AI:
     if _override is not None:
         return _override
@@ -204,6 +308,8 @@ def get_ai() -> AI:
     if provider == "demo":
         from core.demo import DemoAI
         return DemoAI()
-    if provider == "gemini":
-        return GeminiAI(settings.gemini_key(), settings.gemini_model())
-    raise AIError(f"AI_PROVIDER desconocido: {provider!r} (usá 'gemini' o 'demo').")
+    providers = configured_providers()
+    if not providers:
+        raise AIError("No hay ninguna IA configurada: poné GEMINI_API_KEY (o GROQ_API_KEY, CEREBRAS_API_KEY, "
+                      "OPENROUTER_API_KEY) en .env, o usá AI_PROVIDER=demo.")
+    return providers[0] if len(providers) == 1 else ChainAI(providers)

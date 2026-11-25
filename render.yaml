@@ -16,6 +16,12 @@ services:
         value: gemini
       - key: GEMINI_API_KEY
         sync: false        # se carga a mano en Render (no va al repo)
+      - key: GROQ_API_KEY
+        sync: false        # opcional: otra IA gratis de respaldo (console.groq.com)
+      - key: CEREBRAS_API_KEY
+        sync: false        # opcional: otra IA gratis de respaldo (cloud.cerebras.ai)
+      - key: OPENROUTER_API_KEY
+        sync: false        # opcional: otra IA gratis de respaldo (openrouter.ai)
       - key: ACCESS_CODE
         sync: false        # el código que les pasás a amigos y familia
       - key: DATABASE_URL
