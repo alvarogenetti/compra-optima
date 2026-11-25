@@ -203,11 +203,11 @@ def set_ai(ai: AI | None) -> None:
 # en cadena. (url base, variable de la clave, variable de los modelos, modelos por defecto)
 OPENAI_COMPAT = {
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "GROQ_MODELS",
-             "openai/gpt-oss-120b,llama-3.3-70b-versatile,openai/gpt-oss-20b"),
+             "openai/gpt-oss-120b,openai/gpt-oss-20b"),
     "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "CEREBRAS_MODELS",
                  "gpt-oss-120b,llama-3.3-70b,qwen-3-32b"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "OPENROUTER_MODELS",
-                   "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-chat-v3.1:free"),
+                   "nvidia/nemotron-3.5-lightning:free,nvidia/nemotron-3-ultra-550b-a55b:free,google/gemma-4-31b-it:free"),
 }
 
 
@@ -231,7 +231,7 @@ class OpenAICompatAI:
             try:
                 r = self.client.post(f"{self.base_url}/chat/completions", json=body, timeout=TIMEOUTS.get(task, 30),
                                      headers={"Authorization": f"Bearer {self.key}"})
-                if r.status_code == 400 and "response_format" in r.text:
+                if r.status_code == 400 and "response_format" in r.text and "json_validate_failed" not in r.text:
                     # Modelo sin modo JSON: se pide igual y se rescata el JSON del texto
                     body.pop("response_format")
                     r = self.client.post(f"{self.base_url}/chat/completions", json=body, timeout=TIMEOUTS.get(task, 30),
@@ -257,6 +257,9 @@ class OpenAICompatAI:
                     secs = float(r.headers.get("retry-after") or COOL_DEFAULT_S) + 1
                 except ValueError:
                     secs = COOL_DEFAULT_S
+            if code == 400:
+                # La respuesta no entró o no fue JSON válido (pedido demasiado largo): el modelo anda, no se pausa
+                raise AIError(f"{self.name} no pudo con este pedido (HTTP 400, probablemente demasiado largo).")
             if code != 404:
                 _cooldown[f"{self.name}:{model}"] = time.time() + secs
                 _cool_reason[f"{self.name}:{model}"] = 429 if code == 429 else 503

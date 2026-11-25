@@ -653,3 +653,22 @@ def test_cadena_arma_las_ia_con_clave(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY")
     monkeypatch.delenv("OPENROUTER_API_KEY")
     assert settings.ai_provider() == "demo"
+
+
+def test_tanda_que_la_ia_rechaza_se_divide_en_mitades():
+    llamadas = []
+
+    class Corta:
+        name = "x"
+        def json(self, system, messages, task):
+            n = messages[0]["content"].count("\n") - 3   # publicaciones de este pedido (aprox.)
+            ids = [int(l.split(" | ")[0]) for l in messages[0]["content"].split("PUBLICACIONES\n")[1].splitlines()]
+            llamadas.append(len(ids))
+            if len(ids) > 10:
+                raise AIError("demasiado largo")
+            return {"items": [{"id": i, "model": f"M{i}", "score": 70} for i in ids]}
+    set_ai(Corta())
+    prof = interview.normalize_profile({"product": "Notebook", "category": "informatica", "search_queries": ["notebook"]})
+    out = candidates.evaluate_batch([_listing(i, f"Notebook {i}", 1000 + i) for i in range(30)], prof)
+    assert len(out) == 30
+    assert llamadas == [30, 15, 7, 8, 15, 7, 8]

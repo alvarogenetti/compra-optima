@@ -219,7 +219,22 @@ def evaluate(listings: list[dict], profile: dict) -> list[dict]:
     return out
 
 
+MIN_SPLIT = 8
+
+
 def evaluate_batch(listings: list[dict], profile: dict) -> list[dict]:
+    """Evalúa una tanda. Si la IA no puede con tantas juntas (Groq rechaza respuestas largas), se
+    divide en mitades y se evalúa cada una."""
+    try:
+        return _evaluate_once(listings, profile)
+    except AIError:
+        if len(listings) <= MIN_SPLIT:
+            raise
+        half = len(listings) // 2
+        return evaluate_batch(listings[:half], profile) + evaluate_batch(listings[half:], profile)
+
+
+def _evaluate_once(listings: list[dict], profile: dict) -> list[dict]:
     """Pide a la IA la evaluación de una tanda y la cruza con las publicaciones (por id)."""
     lines = "\n".join((f"{i} | {x['title']} | ${x['price']:,.0f} | {x['store_name']}".replace(",", ".")
                        + (f" | ficha: {x['specs']}" if x.get("specs") else ""))

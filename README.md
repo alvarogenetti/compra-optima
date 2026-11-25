@@ -46,6 +46,24 @@ una está sin cupo o falla, se usa la siguiente. Cada una tiene su lista de mode
 están activas. **Cerebras** también está soportada (`CEREBRAS_API_KEY`) pero fuera de la cadena por
 defecto: desde julio de 2026 ya no tiene plan gratis (prueba de $5 por 30 días y después pago por uso).
 
+**Probado con claves reales (25/11/2026):**
+
+| IA | Entrevista | Evaluación de 10 publicaciones | Límites gratis |
+|---|---|---|---|
+| Groq `openai/gpt-oss-120b` | 1 s, buen español | 5 s, 10 de 10, con criterio | 8.000 tokens/min y 1.000 consultas/día por modelo |
+| Groq `openai/gpt-oss-20b` | 1 s, repite alguna pregunta | (rechaza tandas largas) | igual |
+| OpenRouter `nvidia/nemotron-3.5-lightning:free` | 9 a 45 s | 250 s por 30 (inservible) | variable por modelo |
+| OpenRouter `nvidia/nemotron-3-ultra-550b-a55b:free` | 14 s | 178 s por 30 (inservible) | variable |
+
+- **Groq sirve de respaldo muy bueno para la entrevista** (turnos de ~3.000 tokens: 2 o 3 por minuto por
+  modelo) y de respaldo parcial para evaluar: con 8.000 tokens/min alcanza para ~10 a 20 publicaciones por
+  minuto por modelo, no para 150. Con tandas de 30 Groq rechaza la respuesta (JSON demasiado largo, HTTP
+  400): la tanda se divide en mitades hasta 8 publicaciones, y ese error no pone al modelo en pausa.
+- **OpenRouter gratis es lento**: queda de último recurso (sobre todo para la entrevista).
+- `qwen/qwen3.8-27b` en Groq devolvió 0 de 10 y salió de la lista. Los modelos `llama-3.3-70b` de Groq
+  y los `:free` de OpenAI/Meta/DeepSeek de OpenRouter ya no existen: la lista real se ve en
+  `https://api.groq.com/openai/v1/models` y `https://openrouter.ai/api/v1/models`.
+
 El plan gratis de Gemini tiene límites por minuto y por día, y Google puede usar lo que se le manda
 para mejorar sus modelos. Para una prueba chica alcanza; antes de abrirlo a más gente, conviene
 pasar a un plan pago.
