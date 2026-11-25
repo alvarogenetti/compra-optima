@@ -15,7 +15,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 
-from core import comparaya, settings, stores, upgrades
+from core import comparaya, settings, specs, stores, upgrades
 from core.ai import AIError, get_ai
 from core.search import mercadolibre_url, search_all, store_search_url, vtex_available
 
@@ -78,7 +78,13 @@ def _fold(s: str) -> str:
 def _tokens(s: str) -> set[str]:
     # "RyzenTM 7" / "Core™ i7": se saca la marca registrada pegada a la palabra
     text = re.sub(r"(?<=[a-z])tm\b", "", _fold(s.replace(chr(0x2122), "tm").replace(chr(0xAE), "")))
-    return {t for t in re.findall(r"[a-z0-9]+", text) if len(t) > 1}
+    toks = {t for t in re.findall(r"[a-z0-9]+", text) if len(t) > 1}
+    # "RTX4050" / "16gb": también como "rtx" + "4050" / "16" + "gb", para que coincida con "rtx 4050"
+    for t in list(toks):
+        m = re.fullmatch(r"([a-z]{2,})(\d{3,})|(\d+)([a-z]{2,})", t)
+        if m:
+            toks.update(x for x in m.groups() if x and len(x) > 1)
+    return toks
 
 
 MODEL_QUOTA = 6   # publicaciones por modelo sugerido (alcanza para ver varias tiendas)
@@ -93,6 +99,23 @@ def query_match(listing: dict, query: str) -> float:
     if any(t not in title for t in qt if any(c.isdigit() for c in t)):
         return 0.0
     return len(qt & title) / len(qt)
+
+
+def pool_match(listing: dict, query: str) -> bool:
+    """¿La publicación entra en el grupo de una búsqueda amplia? La primera palabra es el tipo de producto
+    ("notebook") y no alcanza sola: de las demás tienen que estar todas las que tienen números ("4050")
+    y, si no hay números, al menos la mitad ("gamer ryzen" → "gamer" o "ryzen")."""
+    title, words = _tokens(listing["title"]), [w for w in re.findall(r"[a-z0-9]+", _fold(query)) if len(w) > 1]
+    if not words or words[0] not in title:
+        return False
+    rest = [w for w in words[1:]]
+    if not rest:
+        return True
+    rest_tokens = set().union(*(_tokens(w) for w in rest))
+    digits = [w for w in rest_tokens if any(ch.isdigit() for ch in w)]
+    if digits:
+        return all(d in title for d in digits)
+    return len(rest_tokens & title) * 2 >= len(rest_tokens)
 
 
 def relevance(listing: dict, queries: list[str]) -> float:
@@ -125,7 +148,15 @@ def prefilter(listings: list[dict], profile: dict, broad: list[str], models: lis
     por precio según el presupuesto."""
     budget = profile.get("budget", {})
     cap, level = budget.get("max_ars"), budget.get("level", "sin_definir")
+    if cap and level == "alto":
+        level = "medio"   # con tope en pesos, el tope ya acota: mirar todo el rango hasta ahí
     keep = [x for x in listings if not cap or x["price"] <= cap * 1.3]
+    # La misma publicación en varias tiendas (On City, Provincia, Carrefour comparten catálogo): para la
+    # evaluación alcanza con la más barata; las demás tiendas se suman después al agrupar por modelo
+    by_title: dict[str, dict] = {}
+    for x in sorted(keep, key=lambda x: x["price"]):
+        by_title.setdefault(title_key(x["title"]), x)
+    keep = list(by_title.values())
     limit = settings.MAX_LISTINGS_TO_EVALUATE
     chosen: list[dict] = []
     seen: set[int] = set()
@@ -139,9 +170,7 @@ def prefilter(listings: list[dict], profile: dict, broad: list[str], models: lis
     for m in models or []:
         # Repartidas por precio según el presupuesto (las más baratas de una línea suelen ser las de menos)
         take(spread([x for x in keep if query_match(x, m) >= 0.6], MODEL_QUOTA, level))
-    # Búsquedas de 3 o más palabras: alcanza con que coincida un tercio ("notebook" + "ryzen" de
-    # "notebook gamer ryzen 7"); las cortas tienen que coincidir en la mitad
-    pools = [[x for x in keep if query_match(x, q) >= (0.34 if len(_tokens(q)) >= 3 else 0.5)] for q in broad]
+    pools = [[x for x in keep if pool_match(x, q)] for q in broad]
     pools = [p for p in pools if p]
     if pools:
         share = max(1, (limit - len(chosen)) // len(pools))
@@ -166,7 +195,7 @@ def profile_text(profile: dict) -> str:
 
 FIXABLE_RE = re.compile(r"ram|memoria|ssd|almacenamiento|disco|\btb\b|\bgb\b")
 EVAL_BATCH = 30      # publicaciones por pedido: con muchas juntas la IA devuelve sólo unas pocas
-EVAL_PARALLEL = 4
+EVAL_PARALLEL = 5
 
 
 def evaluate(listings: list[dict], profile: dict) -> list[dict]:
@@ -367,6 +396,48 @@ def comparaya_listings(models: list[str], profile: dict, store_listings: list[di
     return found, status
 
 
+def title_key(title: str) -> str:
+    return " ".join(sorted(_tokens(title)))
+
+
+def add_siblings(evaluated: list[dict], listings: list[dict]) -> list[dict]:
+    """La evaluación vio una sola publicación por título (la más barata): las mismas en otras tiendas
+    heredan su evaluación, así aparecen en "También en N tiendas"."""
+    by_key: dict[str, list[dict]] = {}
+    for x in listings:
+        by_key.setdefault(title_key(x["title"]), []).append(x)
+    seen = {(e["store"], e["url"]) for e in evaluated}
+    out = list(evaluated)
+    for e in evaluated:
+        for s in by_key.get(title_key(e["title"]), []):
+            if (s["store"], s["url"]) not in seen:
+                seen.add((s["store"], s["url"]))
+                out.append({**s, **{k: e[k] for k in ("model", "score", "fix", "meets", "doubts", "reason") if k in e}})
+    return out
+
+
+SPEC_LOOKUPS = 6
+
+
+def confirm_upgrades(near: list[dict]) -> None:
+    """Para los "casi cumplen" que se podrían completar, la ficha del fabricante dice si de verdad se
+    puede (RAM en ranuras, M.2 libre). Si dice que no, se saca la propuesta; si no se puede confirmar,
+    queda marcada "sin confirmar" (no se inventa)."""
+    todo = [m for m in near if m.get("upgrade")][:SPEC_LOOKUPS]
+    if not todo:
+        return
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        found = list(ex.map(lambda m: specs.lookup(m["model"], m["best"].get("title", "")), todo))
+    for m, spec in zip(todo, found):
+        status = specs.check_upgrade(spec, m.get("fix") or {})
+        m["maker_specs"] = {"text": specs.describe(spec), "sources": spec.get("sources", [])}
+        if status == "no":
+            m.pop("upgrade", None)
+            m["doubts"] = (m.get("doubts") or [])[:1] + ["La ficha del fabricante dice que la RAM está soldada: no se puede ampliar"]
+        else:
+            m["upgrade"]["status"] = status
+
+
 AVAIL_WORKERS = 8
 
 
@@ -387,13 +458,18 @@ def find(profile: dict, postal_code: str | None = None) -> dict:
         raise AIError("Todavía no tenemos tiendas para esa categoría.")
     broad = profile["search_queries"]
     models_q = [m for m in profile.get("suggested_models", []) if m.lower() not in {q.lower() for q in broad}]
-    report = search_all(shops, broad + models_q, profile.get("exclude_words"))
+    # Búsquedas por especificación dura ("notebook rtx 4050", "notebook rtx 4060"...): traen publicaciones
+    # que las amplias no traen (pasó con una TUF FA607NUQ de Frávega). Cuentan como amplias en el reparto.
+    spec_q = [q for q in profile.get("spec_queries", []) if q.lower() not in {x.lower() for x in broad + models_q}]
+    cap = profile.get("budget", {}).get("max_ars")
+    report = search_all(shops, broad + spec_q + models_q, profile.get("exclude_words"),
+                        price_range=(1000, cap * 1.3) if cap else None, deep=set(spec_q))
     via_cy, cy_status = comparaya_listings(models_q, profile, report.listings)
-    pool = prefilter(report.listings, profile, broad, models_q)
+    pool = prefilter(report.listings, profile, broad + spec_q, models_q)
     # Las de ComparaYa (Mercado Libre y tiendas que no leemos) se evalúan siempre
     pool = via_cy + pool[:max(0, settings.MAX_LISTINGS_TO_EVALUATE - len(via_cy))]
     report.stores.append(cy_status)
-    evaluated = evaluate(pool, profile)
+    evaluated = add_siblings(evaluate(pool, profile), report.listings)
     evaluated, unavailable = drop_unavailable(evaluated, postal_code)
     budget = profile.get("budget", {})
     models = group_by_model(evaluated, budget.get("max_ars"))
@@ -404,6 +480,7 @@ def find(profile: dict, postal_code: str | None = None) -> dict:
         upgrades.add_costs(near, min(full) if full else None)
     except Exception as e:  # noqa: BLE001 — sin precios de piezas, igual se muestran
         log.info("precios de piezas: %s", e)
+    confirm_upgrades(near)
     main_q = broad[0]
     return {
         "tiers": tiers,

@@ -46,9 +46,15 @@ class BlockedError(RuntimeError):
 
 
 # ------------------------------------------------------------------ VTEX
-def vtex_api_url(host: str, query: str, size: int = 50) -> str:
+def vtex_api_url(host: str, query: str, size: int = 50, start: int = 0,
+                 price_range: tuple[float, float] | None = None) -> str:
     # VTEX espera los espacios como %20 (con "+" algunas tiendas responden 400)
-    return f"https://{host}/api/catalog_system/pub/products/search?ft={quote(query)}&_from=0&_to={size - 1}"
+    url = f"https://{host}/api/catalog_system/pub/products/search?ft={quote(query)}&_from={start}&_to={start + size - 1}"
+    if price_range:
+        # Filtro de precio de la propia tienda: "notebook rtx 4050" en Frávega da 1.057 resultados y con el
+        # rango del presupuesto, 277 (la API devuelve de a 50)
+        url += f"&fq=P:[{int(price_range[0])}%20TO%20{int(price_range[1])}]"
+    return url
 
 
 def parse_vtex(products: list[dict], store: Store) -> list[dict]:
@@ -148,13 +154,23 @@ def vtex_available(listing: dict, postal_code: str = "1000", client: httpx.Clien
             c.close()
 
 
-def search_vtex(client: httpx.Client, store: Store, query: str) -> list[dict]:
-    r = client.get(vtex_api_url(store.host, query), headers={"Accept": "application/json"})
-    if r.status_code in (403, 429):
-        raise BlockedError(f"HTTP {r.status_code} (la tienda bloquea consultas automáticas)")
-    if r.status_code not in (200, 206):
-        raise RuntimeError(f"HTTP {r.status_code}")
-    return parse_vtex(r.json() if r.content else [], store)
+def search_vtex(client: httpx.Client, store: Store, query: str,
+                price_range: tuple[float, float] | None = None, pages: int = 1) -> list[dict]:
+    out: list[dict] = []
+    for page in range(pages):
+        r = client.get(vtex_api_url(store.host, query, start=page * 50, price_range=price_range),
+                       headers={"Accept": "application/json"})
+        if r.status_code in (403, 429):
+            raise BlockedError(f"HTTP {r.status_code} (la tienda bloquea consultas automáticas)")
+        if r.status_code not in (200, 206):
+            if page:
+                break
+            raise RuntimeError(f"HTTP {r.status_code}")
+        raw = r.json() if r.content else []
+        out += parse_vtex(raw, store)
+        if len(raw) < 50:
+            break
+    return out
 
 
 # ------------------------------------------------------------------ WooCommerce
@@ -274,8 +290,11 @@ class SearchReport:
 
 
 def search_all(stores: list[Store], queries: list[str], exclude: list[str] | None = None,
-               client: httpx.Client | None = None, workers: int = 16) -> SearchReport:
-    """Busca cada query en cada tienda (en paralelo), sin repetidos ni excluidos."""
+               client: httpx.Client | None = None, workers: int = 16,
+               price_range: tuple[float, float] | None = None, deep: set[str] | None = None) -> SearchReport:
+    """Busca cada query en cada tienda (en paralelo), sin repetidos ni excluidos.
+    En tiendas VTEX: `price_range` filtra por precio y las queries de `deep` traen 2 páginas (100)."""
+    deep = deep or set()
     exclude = DEFAULT_EXCLUDE + list(exclude or [])
     own = client is None
     client = client or httpx.Client(timeout=settings.SEARCH_TIMEOUT_S, follow_redirects=True,
@@ -285,7 +304,11 @@ def search_all(stores: list[Store], queries: list[str], exclude: list[str] | Non
     def run(job):
         s, q = job
         try:
-            return s, q, PLATFORMS[s.platform](client, s, q), None
+            if s.platform == "vtex":
+                items = search_vtex(client, s, q, price_range, 2 if q in deep else 1)
+            else:
+                items = PLATFORMS[s.platform](client, s, q)
+            return s, q, items, None
         except Exception as e:  # noqa: BLE001 — una tienda caída no corta las demás
             log.info("%s %r: %s", s.id, q, e)
             return s, q, [], str(e)[:160] or e.__class__.__name__

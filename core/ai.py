@@ -82,7 +82,8 @@ class GeminiAI:
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "model" if m["role"] == "assistant" else "user",
                           "parts": [{"text": m["content"]}]} for m in messages],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4},
+            # La entrevista charla (0.4); la evaluación tiene que dar lo mismo cada vez (0.1)
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1 if task == "evaluate" else 0.4},
         }
         r, failures = None, []
         available = [m for m in self.models if not _cooling(m)]

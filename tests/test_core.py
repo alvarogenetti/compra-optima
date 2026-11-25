@@ -244,7 +244,7 @@ def test_agrupa_por_modelo_y_arma_rangos():
 
 
 def test_find_completo_con_dobles(monkeypatch):
-    def fake_search(shops, queries, exclude=None):
+    def fake_search(shops, queries, exclude=None, **kw):
         assert {s.id for s in shops} >= {"fravega"} and "Philips BHD350" in queries
         return search.SearchReport(
             listings=[_listing(1, "Secador de pelo Philips BHD350", 60000), _listing(2, "Secador de pelo Gama", 40000)],
@@ -555,3 +555,56 @@ def test_marca_registrada_pegada_no_rompe_la_busqueda():
     pool = candidates.prefilter([{**_listing(1, loq["title"], 2879999)}], {"budget": {"level": "alto"}},
                                 ["notebook gamer ryzen 7"])
     assert len(pool) == 1
+
+
+def test_especificacion_pegada_coincide_con_la_busqueda():
+    tuf = {"title": "Notebook Asus TUF Fa607nuq Ryzen 7 16gb RAM 512GB SSD RTX4050 Pantalla"}
+    assert candidates.query_match(tuf, "notebook rtx 4050") == 1.0
+    p = interview.normalize_profile({"product": "Notebook", "category": "informatica",
+                                     "search_queries": ["notebook gamer"],
+                                     "spec_queries": ["notebook rtx 4050", "notebook gamer", "notebook rtx 4060 para arriba ya"]})
+    assert p["spec_queries"] == ["notebook rtx 4050"]   # sin repetir las amplias ni frases largas
+
+
+# ------------------------------------------------------------------ fichas del fabricante
+def test_ficha_del_fabricante_confirma_o_saca_la_ampliacion(monkeypatch):
+    from core import specs
+    monkeypatch.setattr(specs, "_memory", {})
+    fichas = {"Victus": {"confirmed": True, "hz": 144, "ram_slots": 2, "ram_max_gb": 64, "ram_soldered": False,
+                         "m2_slots": 2, "sources": ["https://hp.com/x"]},
+              "Soldada": {"confirmed": True, "hz": None, "ram_slots": None, "ram_max_gb": None, "ram_soldered": True,
+                          "m2_slots": 1, "sources": ["https://y"]},
+              "Rara": {"confirmed": False, "hz": None, "ram_slots": None, "ram_max_gb": None, "ram_soldered": None,
+                       "m2_slots": None, "sources": []}}
+    monkeypatch.setattr(specs, "lookup", lambda model, title="", client=None: fichas[model])
+    near = [{"model": m, "best": {"title": m, "price": 1}, "doubts": [], "fix": {"ram_add_gb": 16, "ssd_tb": 0},
+             "upgrade": {"parts": [], "total": 1}} for m in fichas]
+    candidates.confirm_upgrades(near)
+    assert near[0]["upgrade"]["status"] == "si"
+    assert near[0]["maker_specs"]["text"] == "144 Hz · 2 ranuras de RAM (hasta 64 GB) · 2 M.2"
+    assert "upgrade" not in near[1] and "soldada" in near[1]["doubts"][-1]
+    assert near[2]["upgrade"]["status"] == "sin_confirmar"
+
+
+def test_ficha_sin_busqueda_de_google_queda_sin_confirmar(monkeypatch):
+    from core import specs
+    monkeypatch.setattr(specs, "_memory", {})
+    monkeypatch.setattr(specs, "_unavailable_until", 0.0)
+    monkeypatch.setattr(specs, "_cache_get", lambda key: None)
+    monkeypatch.setattr(specs, "_cache_put", lambda key, data: None)
+    monkeypatch.setattr(specs.settings, "gemini_key", lambda: "k")
+    monkeypatch.setattr(specs.settings, "ai_provider", lambda: "gemini")
+    c = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(429, json={"error": {}})))
+    out = specs.lookup("HP Victus 15-fb3093dx", "", c)
+    assert out["confirmed"] is False and not specs.available()   # no se reintenta por un rato
+
+
+def test_mismas_publicaciones_en_otras_tiendas_heredan_la_evaluacion():
+    a = _listing(1, "Notebook Lenovo LOQ 15ARP11 Ryzen 7", 2879999, store="oncity")
+    b = _listing(2, "Notebook Lenovo LOQ 15ARP11 Ryzen 7", 3409999, store="provincia")
+    pool = candidates.prefilter([a, b], {"budget": {}}, ["notebook lenovo loq"])
+    assert pool == [a]   # para evaluar alcanza con la más barata
+    ev = [{**a, "model": "Lenovo LOQ 15ARP11", "score": 40, "meets": [], "doubts": [], "reason": "", "fix": None}]
+    out = candidates.add_siblings(ev, [a, b])
+    assert [(x["store"], x["model"], x["score"]) for x in out] == [("oncity", "Lenovo LOQ 15ARP11", 40),
+                                                                  ("provincia", "Lenovo LOQ 15ARP11", 40)]

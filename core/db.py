@@ -70,6 +70,14 @@ comparaya_slugs = Table(
 )
 
 
+model_specs = Table(
+    "model_specs", meta,   # ficha del fabricante por modelo (core/specs.py), con fuentes
+    Column("model_key", String(120), primary_key=True),
+    Column("data", JSON),
+    Column("checked_at", DateTime(timezone=True), nullable=False),
+)
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 

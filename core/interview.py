@@ -86,6 +86,12 @@ EL PERFIL
   Argentina, repartidos en distintos rangos de precio (algunos accesibles, algunos de gama media,
   alguno de gama alta), con marca y modelo ("Logitech G502 Lightspeed"). Sólo si estás seguro de que
   existen; se buscan en las tiendas y si no aparecen no se recomiendan.
+- "spec_queries": si el pedido tiene especificaciones DURAS que aparecen en los títulos (modelo de placa
+  de video, línea de procesador, RAM), una búsqueda corta por cada variante que cumple, de 0 a 6:
+  tipo de producto + la especificación. Ej. "RTX 4050 para arriba" → ["notebook rtx 4050",
+  "notebook rtx 4060", "notebook rtx 5050", "notebook rtx 5060"]; "Ryzen 7 o más" → ["notebook ryzen 7",
+  "notebook ryzen 9"]. Así no se escapan publicaciones que las búsquedas amplias no traen. Si no hay
+  especificaciones duras, lista vacía.
 - "exclude_words": palabras de publicaciones que NO son el producto (accesorios, repuestos, combos que
   no pidió), por ejemplo ["pad", "funda", "repuesto"].
 - "budget": {{"level": "economico" | "medio" | "alto" | "sin_definir", "max_ars": número o null (sólo si
@@ -98,7 +104,7 @@ o
 {{"type": "profile", "draft": [...], "profile": {{"product": "Mouse", "category": "informatica",
   "summary": "...", "must": [{{"feature": "", "what_is": "", "why": ""}}], "nice": [...],
   "avoid_paying_for": [{{"feature": "", "why": ""}}], "budget": {{...}}, "search_queries": [...],
-  "suggested_models": [...], "exclude_words": [...]}}}}"""
+  "suggested_models": [...], "spec_queries": [...], "exclude_words": [...]}}}}"""
 
 FORCE_PROFILE = ("(Mensaje del sistema: ya se hicieron todas las preguntas permitidas. "
                  "Devolvé ahora el perfil con lo que sabés.)")
@@ -233,5 +239,7 @@ def normalize_profile(p: dict) -> dict:
                    "note": _s(budget.get("note"), 200)},
         "search_queries": queries,
         "suggested_models": models,
+        "spec_queries": [q for q in _strings(p.get("spec_queries"), 6)
+                         if len(q.split()) <= 4 and q.lower() not in {x.lower() for x in queries}],
         "exclude_words": _strings(p.get("exclude_words"), 15, 40),
     }

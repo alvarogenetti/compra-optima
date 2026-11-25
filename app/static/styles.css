@@ -304,3 +304,4 @@ a { color: var(--accent); }
 .upgrade .cheaper { color: var(--accent); font-weight: 600; }
 .upgrade .muted { color: var(--muted); }
 .upgrade .small { font-size: 12px; }
+.upgrade .confirmed { color: var(--accent); }

@@ -165,9 +165,25 @@ Texto libre ──► Entrevista (IA) ──► Perfil de compra ──► Tiend
      del SSD M.2 en las tiendas (mediana de las 5 más baratas, sin equipos completos) y se muestra el
      total contra la más barata que ya trae todo. Ej. LOQ 15ARP11 + 16 GB + SSD ≈ $395.000 menos que
      la Legion 5 que trae todo (25/11/2026).
-   - Las búsquedas de 3 o más palabras pasan el prefiltro con un tercio de coincidencia, y se saca la
-     marca registrada pegada ("RyzenTM 7"); de cada modelo sugerido entran 6 publicaciones repartidas
-     por precio según el presupuesto (antes, las 6 más baratas: en una línea suelen ser las de menos).
+   - **Búsquedas por especificación dura** (`spec_queries` del perfil): si el pedido exige "RTX 4050 para
+     arriba", se busca también "notebook rtx 4050", "notebook rtx 5050", "notebook rtx 5060"... (2 páginas
+     en VTEX). En tiendas VTEX, además, se filtra por el rango de precio del presupuesto (`fq=P:[..]`):
+     "notebook rtx 4050" en Frávega pasa de 1.057 resultados a 277. Caso: la TUF FA607NUQ de Frávega ·
+     HTVS ($2.711.999) no aparecía; ahora sí.
+   - **Grupos del prefiltro**: la primera palabra de una búsqueda amplia es el tipo de producto y no
+     alcanza sola; si la búsqueda tiene números ("4050") el título los tiene que tener. "RTX4050" pegado
+     cuenta como "rtx 4050" y se saca la marca registrada ("RyzenTM 7"). De cada modelo sugerido entran 6
+     publicaciones repartidas por precio. Con tope en pesos se mira todo el rango hasta el tope.
+   - La misma publicación en varias tiendas se evalúa una vez (la más barata) y las demás heredan la
+     evaluación. Se evalúan hasta 150, en tandas de 30 (5 en paralelo), con temperatura 0,1 para que dé
+     lo mismo cada vez.
+   - **Ficha del fabricante** (`core/specs.py`): para confirmar que una ampliación se puede (RAM en
+     ranuras o soldada, ranuras M.2) se busca la ficha oficial del modelo exacto con Gemini + búsqueda
+     de Google (Google lee las páginas; nosotros no scrapeamos fabricantes) y se guarda con sus fuentes
+     en la tabla `model_specs`. **La búsqueda de Google en Gemini no está en el plan gratis** (responde
+     429): mientras tanto la tarjeta dice "sin confirmar" y no se inventa nada. Se activa sola al
+     habilitar la facturación en Google AI Studio. Si la ficha dice que la RAM está soldada, se saca la
+     propuesta de completar.
 
 ### Capa de IA
 

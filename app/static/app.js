@@ -285,6 +285,9 @@ function card(c, recommended) {
       <li class="total"><span>Total con las mejoras</span><span>≈ ${money.format(c.upgrade.total)}</span></li></ul>
       ${c.upgrade.saves ? `<p class="cheaper">Te ahorrás ≈ ${money.format(c.upgrade.saves)} contra la más barata que ya trae todo (${money.format(c.upgrade.full_price)}).</p>`
         : c.upgrade.full_price ? `<p class="muted">La más barata que ya trae todo cuesta ${money.format(c.upgrade.full_price)}.</p>` : ""}
+      ${c.upgrade.status === "si"
+        ? `<p class="confirmed">✓ Confirmado en la ficha del fabricante${c.maker_specs && c.maker_specs.text ? `: ${esc(c.maker_specs.text)}` : ""}${c.maker_specs && c.maker_specs.sources && c.maker_specs.sources[0] ? ` (<a href="${esc(c.maker_specs.sources[0])}" target="_blank" rel="noopener">fuente</a>)` : ""}.</p>`
+        : `<p class="muted">Que se pueda ampliar está <b>sin confirmar</b>: revisá la ficha del modelo antes de comprar.</p>`}
       <p class="muted small">Precio de referencia de las piezas en las tiendas; la instalación puede tener costo.</p></div>` : ""}
     <div class="actions">
       <a class="btn btn-primary" href="${esc(best.url)}" target="_blank" rel="noopener">${best.store_name.length <= 12 ? `Ver en ${esc(best.store_name)}` : "Ver oferta"}</a>
