@@ -60,6 +60,18 @@ panel. Alta inicial: *New → Blueprint* → repo `compra-optima`.
 **Escaneo (GitHub Actions).** `watch.yml`: cron `23 */3 * * *` y botón *Run workflow*. Si faltan los
 secrets, lo informa y termina sin error. `tests.yml`: `pytest` en cada push.
 
+**Mantener despierta la web (`keepalive.yml`).** Render gratis duerme el servicio tras 15 minutos sin
+visitas y despertarlo tarda hasta ~1 minuto. Cada 10 minutos un workflow hace `GET /api/status` (una ruta
+real de la app: Render contesta solo algunas, como `robots.txt`, sin despertar nada). Costo y límites:
+- Un servicio despierto 24/7 gasta ~744 de las **750 horas gratis del mes, compartidas por todos los servicios
+  gratis de la cuenta** de Render: con otro servicio gratis, se agotarían y Render suspende los servicios
+  hasta el mes siguiente.
+- Es de mejor esfuerzo: GitHub a veces demora el cron y puede quedar un hueco de más de 15 minutos (un
+  arranque en frío ocasional).
+- Para apagarlo, borrar `.github/workflows/keepalive.yml`. No verificamos los términos de Render sobre
+  pings de este tipo (documentación consultada el 26/11/2026 sólo describe el apagado a los 15 minutos y las
+  750 horas): revisarlos antes de depender de esto.
+
 **Bot (Telegram).** @BotFather → `/newbot`. El token va en `COMPRA_BOT_TOKEN` (Render y secret). Al
 arrancar, la web registra el webhook en `RENDER_EXTERNAL_URL`. No usar el bot del tracker.
 
@@ -100,7 +112,7 @@ arrancar, la web registra el webhook en `RENDER_EXTERNAL_URL`. No usar el bot de
 | "Ver en Frávega" abre una página vacía | link armado mal | ver [STORES.md §3](STORES.md#3-particularidades-de-frávega) |
 | Falta Mercado Libre | ComparaYa no tiene la ficha | `comparaya_slugs` guarda "no existe" 7 días; subir `SLUG_VERSION` si se mejoró cómo se arman direcciones |
 | El escaneo no corre | repo inactivo 60 días (GitHub lo desactiva) o faltan secrets | reactivar en Actions; revisar secrets |
-| Render tarda ~1 min en abrir | plan gratis duerme tras 15 min sin uso | esperar; sin solución en el plan gratis |
+| Render tarda ~1 min en abrir | duerme tras 15 min sin uso; `keepalive.yml` lo evita pero es de mejor esfuerzo | esperar; mirar la pestaña Actions por si `mantener-despierto` falla o está desactivado (repos sin actividad por 60 días) |
 | Un modelo de Groq/OpenRouter da 404 | el servicio retiró el modelo | listar los reales (`/v1/models`) y cambiar `GROQ_MODELS` / `OPENROUTER_MODELS` |
 
 ## 7. Seguridad y datos

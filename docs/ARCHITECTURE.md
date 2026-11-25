@@ -117,6 +117,17 @@ contraseñas. Los comentarios de "¿Te sirvió?" no se guardan: llegan por Teleg
 Caches **en memoria** (se pierden al reiniciar, son recomputables): evaluaciones (`candidates._eval_cache`),
 pausas de modelos de IA (`ai._cooldown`), fichas ya vistas (`specs._memory`).
 
+**Estado en el navegador** (`app/static/app.js`, `localStorage`): el servidor no guarda nada de la sesión.
+- La página **siempre abre en el inicio**; lo que se está haciendo vive en memoria.
+- **Historial de búsquedas** (`compra-optima:history:v1`, hasta 8): cada perfil y cada resultado se guardan
+  (perfil, resultados, conversación, fecha). Se reabren desde "Tus búsquedas anteriores" en el inicio, con la
+  fecha de la búsqueda y un aviso de que los precios son los de ese momento (con botón "Actualizar precios").
+  Un perfil corregido es una entrada nueva: la anterior conserva sus resultados. Si el almacenamiento se
+  llena, se descartan las más viejas.
+- Otras claves: `compra-optima:code` (código de acceso) y `compra-optima:cp` (código postal).
+- Límite: el historial es **por navegador y por dispositivo** (no hay cuentas). Borrar los datos del sitio lo
+  borra. Ver [DECISIONS.md](DECISIONS.md) ADR-015.
+
 ## 5. Despliegue
 
 | Pieza | Dónde | Cómo se actualiza |
@@ -124,6 +135,7 @@ pausas de modelos de IA (`ai._cooldown`), fichas ya vistas (`specs._memory`).
 | Web | Render (plan gratis), `render.yaml` | cada push a `main` se publica solo (~1,5 min) |
 | Base | Neon (Postgres gratis), región sa-east-1 | — |
 | Escaneo | GitHub Actions `watch.yml`, cron `23 */3 * * *` | con el repo |
+| Mantener despierta la web | GitHub Actions `keepalive.yml`, cron `*/10 * * * *` (ADR-016) | con el repo |
 | Tests | GitHub Actions `tests.yml` en cada push | con el repo |
 | Bot | Telegram (@BotFather), webhook registrado al arrancar en Render | — |
 

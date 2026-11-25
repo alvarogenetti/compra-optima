@@ -109,3 +109,23 @@ es por proceso (en memoria).
 **Decisión.** `cloud_blocked: true` (Comeros, DeCaba, Hardcore: 403 desde servidores). No se consultan desde
 Render ni GitHub Actions; sí desde una PC. No se intenta evadir el bloqueo.
 **Consecuencias.** Menos ruido en "Dónde buscamos"; menos cobertura en lo publicado.
+
+### ADR-015 · La página siempre abre en el inicio; las búsquedas se guardan en un historial del navegador — *vigente* (26/11/2026)
+**Contexto.** La página restauraba al abrir lo último que se había hecho (por eso aparecía un resultado viejo
+al entrar por el link principal) y cada búsqueda nueva pisaba la anterior: no había forma de volver a un
+resultado.
+**Decisión.** Abrir siempre en el inicio. Guardar cada perfil y cada resultado en un **historial en
+`localStorage`** (hasta 8, con fecha), listado en el inicio. Un perfil corregido es una entrada nueva. Los
+resultados guardados muestran la fecha y avisan que los precios pueden haber cambiado, con "Actualizar precios".
+**Descartado.** Guardarlo en el servidor: exige cuentas o identificar personas (hoy no hay), y los datos son de
+compras sin valor sensible. Sirve cuando se agreguen cuentas (por ejemplo, ligadas a Telegram).
+**Consecuencias.** El historial es por navegador y dispositivo, y se pierde al borrar los datos del sitio. Sin
+costo de servidor ni de base. Una entrevista a medias no se guarda: recargar la página la pierde.
+
+### ADR-016 · Mantener despierta la web gratis de Render con un aviso cada 10 minutos — *vigente* (26/11/2026)
+**Contexto.** Render gratis duerme el servicio a los 15 minutos sin visitas; la primera visita tarda ~1 minuto
+(visto por el dueño al entrar a la página).
+**Decisión.** Workflow `keepalive.yml` que consulta `/api/status` cada 10 minutos.
+**Consecuencias.** Menos arranques en frío, pero de mejor esfuerzo (GitHub demora el cron). Gasta ~744 de las
+750 horas gratis mensuales de Render, compartidas por todos los servicios gratis de la cuenta. Es una
+decisión **reversible** borrando el workflow. La alternativa de fondo es un plan pago de Render.

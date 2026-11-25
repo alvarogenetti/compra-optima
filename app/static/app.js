@@ -1,20 +1,76 @@
 "use strict";
-/* Compra Óptima — lógica de la página. Sin frameworks: 4 vistas (inicio, entrevista, perfil, resultados).
-   El estado vive acá y se guarda en el navegador para no perderlo al recargar. */
+/* Compra Óptima — lógica de la página. Sin frameworks: 5 vistas (código, inicio, entrevista, perfil, resultados).
+   La página SIEMPRE abre en el inicio. Lo que estás haciendo vive en memoria; cada perfil y cada resultado se
+   guarda en el HISTORIAL de este navegador (localStorage) y se reabre desde el inicio. Ver docs/ARCHITECTURE.md §4. */
 
 const $ = (s) => document.querySelector(s);
-const state = { conversation: [], last: null, profile: null, results: null, view: "home", adjusting: false };
+const state = { conversation: [], last: null, profile: null, results: null, view: "home", adjusting: false,
+                entryId: null, searchedAt: null, feedbackSent: false };
 let status = { stores: 0, provider: "" };
 let busy = false;
-const STORE_KEY = "compra-optima:v1";
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (_) { /* sin almacenamiento */ } }
-function load() {
-  try { const s = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); if (s) Object.assign(state, s); } catch (_) { /* nada */ }
+
+/* ---------------- Historial (en este navegador) ---------------- */
+const HISTORY_KEY = "compra-optima:history:v1";
+const HISTORY_MAX = 8;                       // cada resultado pesa decenas de KB: localStorage tiene ~5 MB
+
+function readHistory() {
+  try { const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); return Array.isArray(h) ? h : []; } catch (_) { return []; }
+}
+function writeHistory(list) {
+  const l = list.slice(0, HISTORY_MAX);
+  for (;;) {                                  // si no entra (cuota llena), se van sacando las más viejas
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(l)); return; } catch (_) { if (l.length <= 1) return; l.pop(); }
+  }
+}
+function saveToHistory() {
+  if (!state.profile) return;
+  if (!state.entryId) state.entryId = String(Date.now());
+  const entry = {
+    id: state.entryId, ts: Date.now(), searchedAt: state.results ? state.searchedAt : null,
+    product: state.profile.product, profile: state.profile, results: state.results,
+    conversation: state.conversation, last: state.last, feedbackSent: state.feedbackSent,
+  };
+  writeHistory([entry, ...readHistory().filter((e) => e.id !== state.entryId)]);
+}
+function ago(ts) {
+  const min = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (min < 2) return "recién";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "ayer" : `hace ${d} días`;
+}
+function renderHistory() {
+  const box = $("#history");
+  const list = readHistory();
+  box.hidden = !list.length;
+  if (!list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h2>Tus búsquedas anteriores</h2><ul>${list.map((e) => {
+    const r = e.results;
+    const sub = r ? `${r.counts.matching} modelo${r.counts.matching === 1 ? "" : "s"} que cumple${r.counts.matching === 1 ? "" : "n"}${r.recommended ? ` · te recomendamos ${esc(r.recommended)}` : ""}`
+                  : "Perfil armado, sin buscar precios todavía";
+    return `<li><button type="button" class="history-open" data-open="${esc(e.id)}"><b>${esc(e.product)}</b>
+        <small>${esc(ago(e.searchedAt || e.ts))} · ${sub}</small></button>
+        <button type="button" class="link-btn history-del" data-del="${esc(e.id)}" aria-label="Borrar esta búsqueda">Borrar</button></li>`;
+  }).join("")}</ul><p class="muted-note">Se guardan sólo en este navegador. Los precios son los del momento de la búsqueda.</p>`;
+}
+function openEntry(id) {
+  const e = readHistory().find((x) => x.id === id);
+  if (!e) return;
+  Object.assign(state, { conversation: e.conversation || [], last: e.last || null, profile: e.profile, results: e.results || null,
+                         entryId: e.id, searchedAt: e.searchedAt || null, feedbackSent: !!e.feedbackSent, adjusting: false });
+  renderProfile();
+  if (state.results) { renderResults(); show("results"); } else show("profile");
+}
+function deleteEntry(id) {
+  writeHistory(readHistory().filter((e) => e.id !== id));
+  renderHistory();
 }
 function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.hidden = false;
@@ -52,15 +108,20 @@ function show(view) {
   state.view = view;
   for (const v of ["code", "home", "chat", "profile", "results"]) $(`#view-${v}`).hidden = v !== view;
   $("#restart-btn").hidden = view === "home";
-  save();
+  if (view === "home") renderHistory();
   window.scrollTo({ top: 0 });
 }
 
 /* ---------------- Inicio ---------------- */
+function resetSearch(extra = {}) {
+  Object.assign(state, { conversation: [], last: null, profile: null, results: null, adjusting: false,
+                         entryId: null, searchedAt: null, feedbackSent: false }, extra);
+}
+
 function start(text) {
   text = text.trim();
   if (!text) { $("#start-input").focus(); return; }
-  Object.assign(state, { conversation: [{ role: "user", content: text }], last: null, profile: null, results: null, adjusting: false });
+  resetSearch({ conversation: [{ role: "user", content: text }] });
   show("chat");
   renderThread();
   ask();
@@ -88,6 +149,9 @@ async function ask(finish = false) {
     if (out.type === "profile") {
       state.profile = out.profile;
       state.results = null;
+      // Un perfil nuevo (también si corregiste algo) es una entrada nueva: la anterior conserva sus resultados
+      state.entryId = null; state.searchedAt = null; state.feedbackSent = false;
+      saveToHistory();
       renderProfile();
       show("profile");
     } else {
@@ -112,7 +176,6 @@ async function ask(finish = false) {
     busy = false;
     setComposer(true);
     renderOptions();   // vuelve a armar las opciones (el botón "Listo" arranca deshabilitado)
-    save();
   }
 }
 
@@ -251,7 +314,9 @@ async function search() {
     const cp = ($("#cp-input").value || "").trim().toUpperCase();
     if (cp) { try { localStorage.setItem("compra-optima:cp", cp); } catch (_) { /* nada */ } }
     state.results = await api("/api/candidates", { profile: state.profile, postal_code: /^[A-Z]?\d{4}[A-Z]{0,3}$/.test(cp) ? cp : null });
+    state.searchedAt = Date.now();
     state.feedbackSent = false;
+    saveToHistory();
     renderResults();
   } catch (e) {
     $("#results").innerHTML = `<div class="empty-state"><h2>No pudimos terminar la búsqueda</h2><p>${esc(e.message)}</p>
@@ -259,8 +324,16 @@ async function search() {
     $("#retry-btn").addEventListener("click", () => { busy = false; search(); });
   } finally {
     busy = false;
-    save();
   }
+}
+
+/* "Búsqueda del 25/11 18:50 · hace 3 h": las guardadas muestran precios de ese momento */
+function ageNote() {
+  if (!state.searchedAt) return "";
+  const when = new Intl.DateTimeFormat("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(state.searchedAt);
+  const old = Date.now() - state.searchedAt > 3600_000;
+  return `<p class="muted-note age-note">Búsqueda del ${esc(when)} (${esc(ago(state.searchedAt))}).${old ? " <b>Los precios pueden haber cambiado.</b>" : ""}
+    <button type="button" class="link-btn" id="refresh-btn">Actualizar precios</button></p>`;
 }
 
 function card(c, recommended) {
@@ -378,8 +451,10 @@ function renderResults() {
   if (!r.tiers.length) {
     $("#results").innerHTML = `<div class="empty-state"><h2>Entre lo que revisamos, nada cumple todo</h2>
       <p>Miramos ${r.counts.found} publicaciones en ${ok} tiendas y ninguna de esas encaja del todo con tu perfil (puede haber en tiendas que no leemos). Probá corregir el perfil (por ejemplo, aflojar algún requisito) o mirá en Mercado Libre.</p>
+      ${ageNote()}
       <p><button class="btn" id="back-profile">Volver al perfil</button></p></div>${near}${ml}${fb}${storeStatus}`;
     $("#back-profile").addEventListener("click", () => show("profile"));
+    $("#refresh-btn")?.addEventListener("click", search);
     bindFeedback();
     bindFollow();
     bindMl();
@@ -388,6 +463,7 @@ function renderResults() {
   $("#results").innerHTML = `<div class="results-head"><h1>${esc(state.profile.product)}: tus opciones</h1>
       <p>${r.counts.matching} modelo${r.counts.matching === 1 ? "" : "s"} encaja${r.counts.matching === 1 ? "" : "n"} con tu perfil. Precios de hoy, de contado o transferencia cuando la tienda lo informa.</p>
       ${r.counts.unavailable ? `<p class="muted-note">No mostramos ${r.counts.unavailable} publicación${r.counts.unavailable === 1 ? "" : "es"} que la tienda tiene sin stock${r.postal_code ? ` para el código postal ${esc(r.postal_code)}` : ""}.</p>` : ""}
+      ${ageNote()}
       <p><button class="link-btn" id="back-profile">Ver mi perfil</button></p></div>
     <div class="tiers">${r.tiers.map((t) => `<section class="tier tier-${esc(t.key)}">
         <header class="tier-head">
@@ -398,6 +474,7 @@ function renderResults() {
         <div class="tier-cards">${t.candidates.map((c) => card(c, c.model === r.recommended)).join("")}</div></section>`).join("")}</div>
     ${near}${ml}${fb}${storeStatus}`;
   $("#back-profile").addEventListener("click", () => show("profile"));
+  $("#refresh-btn")?.addEventListener("click", search);
   bindFeedback();
   bindFollow();
   bindMl();
@@ -442,7 +519,7 @@ function bindFeedback() {
         queries: state.profile?.search_queries || [],
       });
       state.feedbackSent = true;
-      save();
+      saveToHistory();
       box.outerHTML = feedbackBox();
     } catch (e) {
       toast(e.message);
@@ -479,16 +556,24 @@ $("#explain-btn").addEventListener("click", () => answer("No sé, explicame las 
 $("#finish-btn").addEventListener("click", () => ask(true));
 $("#search-btn").addEventListener("click", search);
 $("#adjust-btn").addEventListener("click", () => { state.adjusting = true; show("chat"); renderThread(); $("#answer-input").focus(); });
-$("#restart-btn").addEventListener("click", () => {
-  Object.assign(state, { conversation: [], last: null, profile: null, results: null, adjusting: false });
+function goHome() {
+  // La búsqueda actual ya quedó en el historial (se guarda al armar el perfil y al traer resultados)
+  resetSearch();
   $("#start-input").value = "";
   show("home");
+}
+$("#restart-btn").addEventListener("click", goHome);
+$("#brand-link").addEventListener("click", (e) => { e.preventDefault(); goHome(); });
+$("#history").addEventListener("click", (e) => {
+  const open = e.target.closest("[data-open]"), del = e.target.closest("[data-del]");
+  if (open) openEntry(open.dataset.open);
+  else if (del) deleteEntry(del.dataset.del);
 });
-$("#brand-link").addEventListener("click", (e) => { e.preventDefault(); show("home"); });
 
 /* ---------------- Arranque ---------------- */
 (async function init() {
-  load();
+  // Antes la página restauraba lo último que habías hecho: ahora siempre abre en el inicio
+  try { localStorage.removeItem("compra-optima:v1"); } catch (_) { /* nada */ }
   try { $("#cp-input").value = localStorage.getItem("compra-optima:cp") || ""; } catch (_) { /* nada */ }
   try {
     status = await api("/api/status");
@@ -498,8 +583,8 @@ $("#brand-link").addEventListener("click", (e) => { e.preventDefault(); show("ho
     if (status.provider === "demo") { badge.textContent = "Modo demo (sin IA)"; badge.classList.add("warn"); }
     else badge.textContent = `IA: ${status.provider}`;
   } catch (_) { /* el servidor responde igual más tarde */ }
-  if (status.code_required && !getCode()) { viewAfterCode = state.view; showCode(); return; }
-  restoreView(state.view);
+  if (status.code_required && !getCode()) { viewAfterCode = "home"; showCode(); return; }
+  show("home");
 })();
 
 function restoreView(view) {

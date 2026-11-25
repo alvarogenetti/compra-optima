@@ -59,7 +59,8 @@ Todo está documentado en [`docs/`](docs/README.md). Empezá por la arquitectura
   el plan gratis: hoy esas tarjetas dicen "sin confirmar".
 - Mercado Libre sólo aparece cuando ComparaYa tiene el modelo. Frávega no distingue publicaciones importadas.
 - Fuera de informática y gaming hay pocas tiendas: la calidad baja (ver [STORES.md](docs/STORES.md)).
-- Render gratis se duerme: la primera visita tarda ~1 minuto.
+- Render gratis se duerme tras 15 minutos sin visitas (la primera visita tarda ~1 minuto): un aviso cada 10
+  minutos lo mantiene despierto, de mejor esfuerzo. Las búsquedas guardadas viven en el navegador de cada persona.
 
 ## Próximas etapas
 
