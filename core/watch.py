@@ -23,7 +23,7 @@ from sqlalchemy import and_, delete, select
 from core import comparaya, db, market, stores, telegram
 from core.candidates import _fold
 from core.follow import money
-from core.search import search_all
+from core.search import search_all, vtex_available
 
 log = logging.getLogger("watch")
 REALERT_IMPROVEMENT = 0.03
@@ -64,6 +64,11 @@ def scan_model(model: str, category: str, product: str = "", client=None) -> lis
     for x in report.listings:
         if matches(x, model, product) and (x["store"] not in best or x["price"] < best[x["store"]]["price"]):
             best[x["store"]] = x
+    # Publicaciones que la API da con stock pero no se pueden comprar (Frávega "no disponible para tu
+    # ubicación"): no cuentan, así no se avisa una oferta que no existe
+    for store, x in list(best.items()):
+        if x.get("vtex") and vtex_available(x) is False:
+            del best[store]
     ml = mercadolibre_offer(model, product, min(best.values(), key=lambda x: x["price"])["title"] if best else "")
     if ml:
         best["mercadolibre"] = ml

@@ -219,7 +219,7 @@ def _key(model: str) -> str:
 
 
 def find(model: str, product: str, title: str = "", client: httpx.Client | None = None,
-         cpus: list[str] | None = None) -> dict:
+         cpus: list[str] | None = None, max_tries: int = MAX_TRIES) -> dict:
     """Busca la ficha del modelo. Devuelve {found, page_url, ml: [...], others: [...]}."""
     key = _key(model)
     known, slug = _cache_get(key)
@@ -235,7 +235,7 @@ def find(model: str, product: str, title: str = "", client: httpx.Client | None 
                 known = False   # la ficha ya no está: se vuelve a buscar
         if not known:
             slug = None
-            for i, cand in enumerate(slug_candidates(product, model, title, cpus)):
+            for i, cand in enumerate(slug_candidates(product, model, title, cpus)[:max_tries]):
                 if i:
                     time.sleep(PAUSE_S)
                 r = c.get(BASE + cand)

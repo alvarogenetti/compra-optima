@@ -259,7 +259,7 @@ def test_find_completo_con_dobles(monkeypatch):
                                         "search_queries": ["secador de pelo"], "suggested_models": ["Philips BHD350"]})
     out = candidates.find(prof)
     assert out["recommended"] == "Philips BHD350"
-    assert out["counts"] == {"found": 2, "evaluated": 2, "matching": 1}
+    assert out["counts"] == {"found": 2, "evaluated": 2, "matching": 1, "unavailable": 0}
     assert out["links"]["mercadolibre"][0]["url"].endswith("/philips-bhd350")   # modelo primero
     assert out["links"]["mercadolibre"][-1]["url"].endswith("/secador-de-pelo")
 
@@ -466,7 +466,7 @@ def test_si_contradice_un_obligatorio_el_puntaje_se_limita():
 def test_comparaya_suma_mercadolibre_a_los_candidatos(monkeypatch):
     seen = {}
 
-    def fake_find(model, product, title="", cpus=None):
+    def fake_find(model, product, title="", cpus=None, max_tries=8):
         seen[model] = title
         return {"found": True, "others": [{"shop": "Max Tecno", "title": "Notebook Asus TUF Gaming A15 FA506NCQ",
                                            "price": 2276958.0, "list": None, "url": "https://maxtecno/x", "intl": False}],
@@ -492,3 +492,66 @@ def test_comparaya_direcciones_de_notebooks():
                                       ["ryzen-7-7435hs", "ryzen-7-7735hs"])
     assert cands[:3] == ["notebook-asus-tuf-gaming-a15-ryzen-7-7435hs", "notebook-asus-tuf-gaming-a15-ryzen-7-7735hs",
                          "notebook-asus-tuf-gaming-a15"]
+
+
+def test_saca_las_publicaciones_que_no_se_pueden_comprar(monkeypatch):
+    def fake_available(listing, postal_code="1000", client=None):
+        assert postal_code == "3000"
+        return {"a": False, "b": True}.get(listing["vtex"]["item"])
+    monkeypatch.setattr(candidates, "vtex_available", fake_available)
+    ev = [{**_listing(1, "HP Envy", 1), "score": 90, "vtex": {"item": "a"}},
+          {**_listing(2, "HP Gamer", 1), "score": 90, "vtex": {"item": "b"}},
+          {**_listing(3, "Sin VTEX", 1), "score": 90},
+          {**_listing(4, "Malo", 1), "score": 10, "vtex": {"item": "a"}}]   # no se muestra: ni se consulta
+    left, gone = candidates.drop_unavailable(ev, "3000")
+    assert [x["title"] for x in left] == ["HP Gamer", "Sin VTEX", "Malo"] and gone == 1
+
+
+def test_simulacion_vtex_sin_stock():
+    def handler(req):
+        body = json.loads(req.content)
+        assert body["postalCode"] == "3000" and body["items"][0]["id"] == "990268533"
+        return httpx.Response(200, json={"items": [{"id": "990268533", "availability": "withoutStock"}],
+                                         "logisticsInfo": [{"slas": [{"name": "x"}]}]})
+    c = httpx.Client(transport=httpx.MockTransport(handler))
+    listing = {"vtex": {"host": "www.fravega.com", "item": "990268533", "seller": "s"}}
+    assert search.vtex_available(listing, "3000", c) is False
+    assert search.vtex_available({"title": "sin datos"}, "3000", c) is None
+
+
+def test_casi_cumple_con_costo_de_completar(monkeypatch):
+    from core import upgrades
+    pedidos = []
+
+    def fake_part(kind, size, ddr="ddr5"):
+        pedidos.append((kind, size, ddr))
+        return {"label": "Módulo de RAM 16 GB DDR5" if kind == "ram" else "SSD", "price": 100000 if kind == "ram" else 120000,
+                "url": "u", "title": "t", "store_name": "S"}
+    monkeypatch.setattr(upgrades, "part_price", fake_part)
+    near = [{"model": "Victus", "best": {"price": 2161767, "title": "HP Victus R7 RTX 4050 16GB DDR5 512GB"},
+             "fix": {"ram_add_gb": 16, "ssd_tb": 1, "note": "2 ranuras DDR5"}},
+            {"model": "Otra", "best": {"price": 2500000, "title": "x"}, "fix": {"ram_add_gb": 16, "ssd_tb": 0, "note": ""}},
+            {"model": "Sin arreglo", "best": {"price": 1, "title": "x"}, "fix": None}]
+    upgrades.add_costs(near, 3849924)
+    up = near[0]["upgrade"]
+    assert up["total"] == 2161767 + 100000 + 120000 and up["saves"] == 3849924 - up["total"]
+    assert "upgrade" in near[1] and "upgrade" not in near[2]
+    assert pedidos == [("ram", 16, "ddr5"), ("ssd", 1, "")]   # cada pieza se busca una sola vez
+
+
+def test_piezas_reconocen_los_titulos():
+    from core import upgrades
+    _, ram = upgrades.part_queries("ram", 16, "ddr5")
+    assert ram.search(upgrades._fold("Memoria Ram Kingston Sodimm Fury Ddr5 16gb 4800mhz"))
+    assert not ram.search(upgrades._fold("Memoria Ram Kingston Fury DDR5 16GB (PC de escritorio)"))
+    _, ssd = upgrades.part_queries("ssd", 1)
+    assert ssd.search(upgrades._fold("Disco Interno Verbatim 1TB VI3000 PCIE NVME M.2 SSD"))
+
+
+def test_marca_registrada_pegada_no_rompe_la_busqueda():
+    assert "ryzen" in candidates._tokens("Notebook Lenovo LOQ 15ARP11 RyzenTM 7 170")
+    assert "core" in candidates._tokens("Intel Core™ i7")
+    loq = {"title": "Notebook Lenovo LOQ 15ARP11 RyzenTM 7 170 512GB 16GB RTX 5050"}
+    pool = candidates.prefilter([{**_listing(1, loq["title"], 2879999)}], {"budget": {"level": "alto"}},
+                                ["notebook gamer ryzen 7"])
+    assert len(pool) == 1

@@ -148,7 +148,26 @@ Texto libre ──► Entrevista (IA) ──► Perfil de compra ──► Tiend
      título (pide Ryzen 7 y dice Ryzen 5): si contradice alguno, el código limita el puntaje a 40 (pasa
      a "Casi cumplen", con "No cumple: ..."). Se agrupa por modelo y se corta en **tres rangos por precio** (en proporción: dos modelos de precio parecido
      caen juntos). "Mi recomendación" sale del rango que va con el presupuesto.
-   - **Casi cumplen**: los que tienen puntaje 35-54, con lo que les falta.
+   - **Casi cumplen**: puntaje 25-54, con lo que les falta. Primero los que se pueden completar.
+   - **Evaluación en tandas** de 30 publicaciones, 4 en paralelo: con 120 juntas la IA devolvía sólo
+     unas pocas (pasó: 4 de 120). Se le pide devolver todas las que son el producto, aunque no cumplan.
+   - **Equivalencias**: "Ryzen 7 o superior" lo cumplen i7, Core Ultra 7, Ryzen AI 7 y cualquier gama
+     9; una placa mayor cumple "o superior". Nunca dice "es la única": sólo ve una parte del mercado.
+   - **Especificaciones de la ficha**: de las tiendas VTEX se mandan también las especificaciones de la
+     ficha (modelo exacto, memoria, pantalla, peso...), no sólo el título.
+   - **Se puede comprar**: antes de mostrar, cada publicación VTEX se verifica con la simulación de
+     compra de la tienda (`/api/checkout/pub/orderForms/simulation`, la del carrito) y el código postal
+     que se pone en la página. Frávega da con stock en su API publicaciones que en la web dicen "no
+     disponible para tu ubicación"; la simulación las da `withoutStock` y se descartan (la página dice
+     cuántas). También en el escaneo de Seguir precio.
+   - **Cuánto cuesta completar** (`core/upgrades.py`): si lo único que falta es RAM o disco y la IA sabe
+     que se puede ampliar (ranura libre, RAM no soldada), se busca el precio real del módulo SODIMM o
+     del SSD M.2 en las tiendas (mediana de las 5 más baratas, sin equipos completos) y se muestra el
+     total contra la más barata que ya trae todo. Ej. LOQ 15ARP11 + 16 GB + SSD ≈ $395.000 menos que
+     la Legion 5 que trae todo (25/11/2026).
+   - Las búsquedas de 3 o más palabras pasan el prefiltro con un tercio de coincidencia, y se saca la
+     marca registrada pegada ("RyzenTM 7"); de cada modelo sugerido entran 6 publicaciones repartidas
+     por precio según el presupuesto (antes, las 6 más baratas: en una línea suelen ser las de menos).
 
 ### Capa de IA
 

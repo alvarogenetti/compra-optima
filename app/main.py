@@ -61,6 +61,7 @@ class InterviewIn(BaseModel):
 
 class CandidatesIn(BaseModel):
     profile: dict
+    postal_code: str | None = Field(default=None, pattern=r"^[A-Za-z]?\d{4}[A-Za-z]{0,3}$")
 
 
 class FeedbackIn(BaseModel):
@@ -122,7 +123,7 @@ def do_interview(body: InterviewIn, request: Request):
 @app.post("/api/candidates")
 def do_candidates(body: CandidatesIn, request: Request):
     protect(request, "search", settings.LIMIT_SEARCH_PER_HOUR)
-    return candidates.find(interview.normalize_profile(body.profile))
+    return candidates.find(interview.normalize_profile(body.profile), body.postal_code)
 
 
 class Offer(BaseModel):

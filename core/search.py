@@ -66,7 +66,7 @@ def parse_vtex(products: list[dict], store: Store) -> list[dict]:
                     continue
                 # Algunas tiendas (Frávega) devuelven Price SIN IVA y el impuesto aparte en Tax:
                 # el precio que se paga es la suma (en las demás Tax viene en 0)
-                price = float(price) + float(o.get("Tax") or 0)
+                price = round(float(price) + float(o.get("Tax") or 0), 2)
                 lst = o.get("ListPrice") if (o.get("ListPrice") or 0) > price else None
                 free = [i.get("NumberOfInstallments") or 0 for i in (o.get("Installments") or [])
                         if not i.get("InterestRate") and (i.get("NumberOfInstallments") or 0) > 1]
@@ -78,7 +78,11 @@ def parse_vtex(products: list[dict], store: Store) -> list[dict]:
                         "list": float(lst) if lst else None,
                         "cuotas": max(free) if free else None,
                         "promo": ", ".join(dict.fromkeys(t for t in teasers if t)) or None,
-                        "url": product_url(store, p, it)}
+                        "url": product_url(store, p, it),
+                        # Para verificar después si se puede comprar en la zona (simulación de VTEX)
+                        "vtex": {"host": store.host.split("/")[0], "item": str(it.get("itemId") or ""),
+                                 "seller": str(s.get("sellerId") or "1")},
+                        "specs": vtex_specs(p)}
         if best:
             out.append(best)
     return out
@@ -92,6 +96,56 @@ def product_url(store: Store, p: dict, item: dict) -> str:
         return f"https://www.fravega.com/p/{slug}-{item['itemId']}/"
     host_root = store.host.split("/")[0]
     return p.get("link") or f"https://{host_root}/{p.get('linkText', '')}/p"
+
+
+SPEC_KEYS = re.compile(r"memoria|ram|disco|almacenamiento|ssd|procesador|placa|video|gpu|pantalla|"
+                       r"frecuencia|tasa|hz|resoluci|ranura|slot|ampliable|expandible|panel|tama|peso|"
+                       r"bater|conectividad|puertos|usb|potencia|watt|modelo", re.I)
+
+
+def vtex_specs(p: dict, limit: int = 420) -> str:
+    """Especificaciones de la ficha (no sólo el título): Hz, ranuras de RAM, tipo de panel, potencia...
+    Se mandan a la evaluación para no adivinar lo que el título no dice."""
+    out = []
+    for name in p.get("allSpecifications") or []:
+        if not SPEC_KEYS.search(name):
+            continue
+        vals = p.get(name)
+        val = ", ".join(str(v) for v in vals) if isinstance(vals, list) else str(vals or "")
+        val = re.sub(r"\s+", " ", htmllib.unescape(re.sub(r"<[^>]+>", " ", val))).strip()
+        if val and len(val) < 120:
+            out.append(f"{name}: {val}")
+    return "; ".join(out)[:limit]
+
+
+def vtex_available(listing: dict, postal_code: str = "1000", client: httpx.Client | None = None) -> bool | None:
+    """¿Se puede comprar? Simulación de compra de VTEX (la que usa el carrito de la tienda) con el código
+    postal. Frávega muestra con stock en su API publicaciones que en la web dicen "no disponible para tu
+    ubicación": la simulación las da "withoutStock". None = no se pudo saber (no se descarta)."""
+    v = listing.get("vtex") or {}
+    if not v.get("item"):
+        return None
+    own = client is None
+    c = client or httpx.Client(timeout=15, headers={"User-Agent": UA, "Accept": "application/json"})
+    try:
+        r = c.post(f"https://{v['host']}/api/checkout/pub/orderForms/simulation?sc=1",
+                   json={"items": [{"id": v["item"], "quantity": 1, "seller": v["seller"]}],
+                         "postalCode": postal_code or "1000", "country": "ARG"})
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        items = data.get("items") or []
+        if not items:
+            return False
+        if items[0].get("availability") != "available":
+            return False
+        slas = ((data.get("logisticsInfo") or [{}])[0]).get("slas") or []
+        return bool(slas)
+    except (httpx.HTTPError, ValueError):
+        return None
+    finally:
+        if own:
+            c.close()
 
 
 def search_vtex(client: httpx.Client, store: Store, query: str) -> list[dict]:
@@ -220,7 +274,7 @@ class SearchReport:
 
 
 def search_all(stores: list[Store], queries: list[str], exclude: list[str] | None = None,
-               client: httpx.Client | None = None, workers: int = 8) -> SearchReport:
+               client: httpx.Client | None = None, workers: int = 16) -> SearchReport:
     """Busca cada query en cada tienda (en paralelo), sin repetidos ni excluidos."""
     exclude = DEFAULT_EXCLUDE + list(exclude or [])
     own = client is None

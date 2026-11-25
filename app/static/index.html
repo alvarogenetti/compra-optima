@@ -88,6 +88,10 @@
     <!-- 3. Perfil -->
     <section id="view-profile" class="view" hidden>
       <div class="profile" id="profile"></div>
+      <div class="cp-row">
+        <label for="cp-input">Tu código postal <small>(para mostrar sólo lo que te pueden enviar o que podés retirar)</small></label>
+        <input id="cp-input" type="text" inputmode="numeric" maxlength="8" placeholder="Ej: 3000" autocomplete="postal-code">
+      </div>
       <div class="profile-actions">
         <button class="btn btn-primary btn-lg" id="search-btn">Buscar precios</button>
         <button class="btn" id="adjust-btn">Corregir algo</button>

@@ -248,7 +248,9 @@ async function search() {
     <p><b>Buscando ${esc(state.profile.product.toLowerCase())} en las tiendas…</b></p>
     <p>Consultamos precios reales y después evaluamos cada publicación contra tu perfil. Puede tardar hasta un minuto.</p></div>`;
   try {
-    state.results = await api("/api/candidates", { profile: state.profile });
+    const cp = ($("#cp-input").value || "").trim().toUpperCase();
+    if (cp) { try { localStorage.setItem("compra-optima:cp", cp); } catch (_) { /* nada */ } }
+    state.results = await api("/api/candidates", { profile: state.profile, postal_code: /^[A-Z]?\d{4}[A-Z]{0,3}$/.test(cp) ? cp : null });
     state.feedbackSent = false;
     renderResults();
   } catch (e) {
@@ -278,6 +280,12 @@ function card(c, recommended) {
     ${c.over_budget ? `<div class="price-sub over">Se pasa un poco de tu tope</div>` : ""}
     ${c.reason ? `<p class="reason">${esc(c.reason)}</p>` : ""}
     <ul class="checks">${(c.meets || []).map((m) => `<li>${esc(m)}</li>`).join("")}${(c.doubts || []).map((d) => `<li class="doubt">${esc(d)}</li>`).join("")}</ul>
+    ${c.upgrade ? `<div class="upgrade"><p><b>Cómo completarla:</b>${c.upgrade.note ? ` ${esc(c.upgrade.note)}.` : ""}</p>
+      <ul>${c.upgrade.parts.map((pt) => `<li><a href="${esc(pt.url)}" target="_blank" rel="noopener">+ ${esc(pt.label)}</a><span>≈ ${money.format(pt.price)}</span></li>`).join("")}
+      <li class="total"><span>Total con las mejoras</span><span>≈ ${money.format(c.upgrade.total)}</span></li></ul>
+      ${c.upgrade.saves ? `<p class="cheaper">Te ahorrás ≈ ${money.format(c.upgrade.saves)} contra la más barata que ya trae todo (${money.format(c.upgrade.full_price)}).</p>`
+        : c.upgrade.full_price ? `<p class="muted">La más barata que ya trae todo cuesta ${money.format(c.upgrade.full_price)}.</p>` : ""}
+      <p class="muted small">Precio de referencia de las piezas en las tiendas; la instalación puede tener costo.</p></div>` : ""}
     <div class="actions">
       <a class="btn btn-primary" href="${esc(best.url)}" target="_blank" rel="noopener">${best.store_name.length <= 12 ? `Ver en ${esc(best.store_name)}` : "Ver oferta"}</a>
       ${status.follow_enabled
@@ -365,8 +373,8 @@ function renderResults() {
       <div class="tier-cards">${r.near.map((c) => card(c, false)).join("")}</div></section>` : "";
   const fb = feedbackBox();
   if (!r.tiers.length) {
-    $("#results").innerHTML = `<div class="empty-state"><h2>No encontramos opciones que cumplan todo</h2>
-      <p>Revisamos ${r.counts.found} publicaciones en ${ok} tiendas y ninguna encaja del todo con tu perfil. Probá corregir el perfil (por ejemplo, aflojar algún requisito) o mirá en Mercado Libre.</p>
+    $("#results").innerHTML = `<div class="empty-state"><h2>Entre lo que revisamos, nada cumple todo</h2>
+      <p>Miramos ${r.counts.found} publicaciones en ${ok} tiendas y ninguna de esas encaja del todo con tu perfil (puede haber en tiendas que no leemos). Probá corregir el perfil (por ejemplo, aflojar algún requisito) o mirá en Mercado Libre.</p>
       <p><button class="btn" id="back-profile">Volver al perfil</button></p></div>${near}${ml}${fb}${storeStatus}`;
     $("#back-profile").addEventListener("click", () => show("profile"));
     bindFeedback();
@@ -376,6 +384,7 @@ function renderResults() {
   }
   $("#results").innerHTML = `<div class="results-head"><h1>${esc(state.profile.product)}: tus opciones</h1>
       <p>${r.counts.matching} modelo${r.counts.matching === 1 ? "" : "s"} encaja${r.counts.matching === 1 ? "" : "n"} con tu perfil. Precios de hoy, de contado o transferencia cuando la tienda lo informa.</p>
+      ${r.counts.unavailable ? `<p class="muted-note">No mostramos ${r.counts.unavailable} publicación${r.counts.unavailable === 1 ? "" : "es"} que la tienda tiene sin stock${r.postal_code ? ` para el código postal ${esc(r.postal_code)}` : ""}.</p>` : ""}
       <p><button class="link-btn" id="back-profile">Ver mi perfil</button></p></div>
     <div class="tiers">${r.tiers.map((t) => `<section class="tier tier-${esc(t.key)}">
         <header class="tier-head">
@@ -477,6 +486,7 @@ $("#brand-link").addEventListener("click", (e) => { e.preventDefault(); show("ho
 /* ---------------- Arranque ---------------- */
 (async function init() {
   load();
+  try { $("#cp-input").value = localStorage.getItem("compra-optima:cp") || ""; } catch (_) { /* nada */ }
   try {
     status = await api("/api/status");
     $("#store-count").textContent = status.stores;

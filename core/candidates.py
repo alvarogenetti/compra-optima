@@ -15,14 +15,15 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 
-from core import comparaya, settings, stores
+from core import comparaya, settings, stores, upgrades
 from core.ai import AIError, get_ai
-from core.search import mercadolibre_url, search_all, store_search_url
+from core.search import mercadolibre_url, search_all, store_search_url, vtex_available
 
 log = logging.getLogger("candidates")
 
 EVAL_SYSTEM = """Sos el asesor de compras de "Compra Óptima" (Argentina). Te paso el perfil de compra de una
-persona y una lista de publicaciones REALES de tiendas argentinas (id | título | precio | tienda).
+persona y una lista de publicaciones REALES de tiendas argentinas (id | título | precio | tienda | y a
+veces "ficha:" con especificaciones de la ficha de la tienda, que valen tanto como el título).
 Evaluá cada publicación contra el perfil, sólo con lo que dice el título y lo que sepas con seguridad
 de ese modelo. Español rioplatense, simple, sin tecnicismos sin explicar.
 
@@ -41,12 +42,24 @@ Para cada publicación que SEA el producto buscado (no accesorios, repuestos ni 
   ninguno). Contradecir es que el título diga otra cosa (pide 32 GB y dice 16 GB; pide Ryzen 7 o
   superior y dice Ryzen 5), no que no lo mencione. Si en "doubts" vas a decir que NO llega a algo
   obligatorio ("la RAM es de 16 GB", "tiene 512 GB"), entonces va en "fails_must", no sólo en "doubts".
+- "fix": sólo si lo que no cumple es RAM o almacenamiento Y sabés (por la ficha o por el modelo) que
+  se puede ampliar (ranura de RAM libre o RAM no soldada; segundo M.2 o reemplazar el disco):
+  {"ram_add_gb": cuántos GB agregar (16 o 32) o 0, "ssd_tb": TB de SSD a sumar o cambiar (0.5, 1, 2)
+  o 0, "note": "tiene 2 ranuras DDR5 (hasta 64 GB)"}. Si no estás seguro de que se pueda, no pongas "fix".
 - "meets": hasta 3 cosas del perfil que cumple, en palabras simples.
 - "doubts": hasta 2 cosas que no cumple o que no se pueden confirmar por el título.
 - "reason": una oración de por qué le sirve (o no) a esta persona.
-Las publicaciones que NO son el producto, omitilas.
+EQUIVALENCIAS: comparás por gama, no por marca. "Ryzen 7 o superior" lo cumplen también Intel Core i7,
+Core Ultra 7, Ryzen AI 7 y cualquier gama 9 (Core i9, Core Ultra 9, Ryzen 9, Ryzen AI 9); "Ryzen 5 o
+superior" lo cumplen i5/Core Ultra 5/Ryzen AI 5 y gamas mayores. Lo mismo al revés si piden Intel.
+Una placa de video mayor cumple "o superior" (RTX 4060 cumple "RTX 4050 o superior"; RTX 5050 también).
+NUNCA digas "es la única", "no hay otra" ni "no existe": sólo ves una parte de las publicaciones.
 
-Respondé SÓLO JSON: {"items": [{"id": 0, "model": "", "score": 0, "fails_must": [], "meets": [], "doubts": [], "reason": ""}]}"""
+Devolvé TODAS las publicaciones que son el producto buscado, aunque no cumplan (con puntaje bajo y
+"fails_must"): la persona quiere ver también las que casi cumplen. Sólo omití las que NO son el producto
+(accesorios, repuestos, otra cosa).
+
+Respondé SÓLO JSON: {"items": [{"id": 0, "model": "", "score": 0, "fails_must": [], "fix": null, "meets": [], "doubts": [], "reason": ""}]}"""
 FAIL_CAP = 40   # si contradice un obligatorio, como mucho "casi cumple"
 
 TIERS = [
@@ -63,7 +76,9 @@ def _fold(s: str) -> str:
 
 
 def _tokens(s: str) -> set[str]:
-    return {t for t in re.findall(r"[a-z0-9]+", _fold(s)) if len(t) > 1}
+    # "RyzenTM 7" / "Core™ i7": se saca la marca registrada pegada a la palabra
+    text = re.sub(r"(?<=[a-z])tm\b", "", _fold(s.replace(chr(0x2122), "tm").replace(chr(0xAE), "")))
+    return {t for t in re.findall(r"[a-z0-9]+", text) if len(t) > 1}
 
 
 MODEL_QUOTA = 6   # publicaciones por modelo sugerido (alcanza para ver varias tiendas)
@@ -122,8 +137,11 @@ def prefilter(listings: list[dict], profile: dict, broad: list[str], models: lis
                 chosen.append(x)
 
     for m in models or []:
-        take(sorted((x for x in keep if query_match(x, m) >= 0.6), key=lambda x: x["price"])[:MODEL_QUOTA])
-    pools = [[x for x in keep if query_match(x, q) >= 0.5] for q in broad]
+        # Repartidas por precio según el presupuesto (las más baratas de una línea suelen ser las de menos)
+        take(spread([x for x in keep if query_match(x, m) >= 0.6], MODEL_QUOTA, level))
+    # Búsquedas de 3 o más palabras: alcanza con que coincida un tercio ("notebook" + "ryzen" de
+    # "notebook gamer ryzen 7"); las cortas tienen que coincidir en la mitad
+    pools = [[x for x in keep if query_match(x, q) >= (0.34 if len(_tokens(q)) >= 3 else 0.5)] for q in broad]
     pools = [p for p in pools if p]
     if pools:
         share = max(1, (limit - len(chosen)) // len(pools))
@@ -146,11 +164,36 @@ def profile_text(profile: dict) -> str:
             f"Presupuesto: {b.get('level', 'sin_definir')}{tope}. {b.get('note', '')}")
 
 
+FIXABLE_RE = re.compile(r"ram|memoria|ssd|almacenamiento|disco|\btb\b|\bgb\b")
+EVAL_BATCH = 30      # publicaciones por pedido: con muchas juntas la IA devuelve sólo unas pocas
+EVAL_PARALLEL = 4
+
+
 def evaluate(listings: list[dict], profile: dict) -> list[dict]:
-    """Pide a la IA la evaluación y la cruza con las publicaciones (por id)."""
+    """Evalúa en tandas en paralelo (respuestas más completas y más rápidas que un pedido gigante)."""
     if not listings:
         return []
-    lines = "\n".join(f"{i} | {x['title']} | ${x['price']:,.0f} | {x['store_name']}".replace(",", ".")
+    batches = [listings[i:i + EVAL_BATCH] for i in range(0, len(listings), EVAL_BATCH)]
+    if len(batches) == 1:
+        return evaluate_batch(batches[0], profile)
+    out: list[dict] = []
+    errors = []
+    with ThreadPoolExecutor(max_workers=EVAL_PARALLEL) as ex:
+        futures = [ex.submit(evaluate_batch, b, profile) for b in batches]
+        for f in futures:
+            try:
+                out += f.result()
+            except AIError as e:   # una tanda que falla no tira las demás
+                errors.append(e)
+    if errors and not out:
+        raise errors[0]
+    return out
+
+
+def evaluate_batch(listings: list[dict], profile: dict) -> list[dict]:
+    """Pide a la IA la evaluación de una tanda y la cruza con las publicaciones (por id)."""
+    lines = "\n".join((f"{i} | {x['title']} | ${x['price']:,.0f} | {x['store_name']}".replace(",", ".")
+                       + (f" | ficha: {x['specs']}" if x.get("specs") else ""))
                       for i, x in enumerate(listings))
     raw = get_ai().json(EVAL_SYSTEM, [{"role": "user", "content":
                                        f"PERFIL\n{profile_text(profile)}\n\nPUBLICACIONES\n{lines}"}],
@@ -170,8 +213,21 @@ def evaluate(listings: list[dict], profile: dict) -> list[dict]:
             # La IA a veces puntúa alto igual: el tope lo pone el código
             score = min(score, FAIL_CAP)
             doubts = [f"No cumple: {', '.join(fails)}"] + doubts[:1]
+        fix = it.get("fix") if isinstance(it.get("fix"), dict) else None
+        if fix:
+            try:
+                fix = {"ram_add_gb": int(float(fix.get("ram_add_gb") or 0)) if float(fix.get("ram_add_gb") or 0) in (8, 16, 32, 64) else 0,
+                       "ssd_tb": float(fix.get("ssd_tb") or 0) if float(fix.get("ssd_tb") or 0) in (0.5, 1, 2, 4) else 0,
+                       "note": str(fix.get("note") or "")[:120]}
+            except (TypeError, ValueError):
+                fix = None
+            if fix and not (fix["ram_add_gb"] or fix["ssd_tb"]):
+                fix = None
+            # Sólo si TODO lo que falta es RAM o disco: un procesador o una placa de video no se amplían
+            if fix and any(not FIXABLE_RE.search(_fold(f)) for f in fails):
+                fix = None
         out.append({**listings[i], "model": str(it.get("model") or listings[i]["title"]).strip()[:80],
-                    "score": score,
+                    "score": score, "fix": fix if fails else None,
                     "meets": [str(m)[:120] for m in (it.get("meets") or [])][:3],
                     "doubts": doubts,
                     "reason": str(it.get("reason") or "")[:300]})
@@ -189,9 +245,11 @@ def group_by_model(evaluated: list[dict], cap: float | None = None) -> list[dict
         if not k:
             continue
         g = groups.setdefault(k, {"model": x["model"], "score": x["score"], "meets": x["meets"],
-                                  "doubts": x["doubts"], "reason": x["reason"], "offers": []})
+                                  "doubts": x["doubts"], "reason": x["reason"], "fix": x.get("fix"),
+                                  "specs": x.get("specs", ""), "offers": []})
         if x["score"] > g["score"]:
-            g.update(score=x["score"], meets=x["meets"], doubts=x["doubts"], reason=x["reason"])
+            g.update(score=x["score"], meets=x["meets"], doubts=x["doubts"], reason=x["reason"],
+                     fix=x.get("fix"), specs=x.get("specs", ""))
         g["offers"].append({k2: x[k2] for k2 in ("store", "store_name", "title", "price", "list",
                                                   "cuotas", "promo", "url")})
     out = []
@@ -239,7 +297,7 @@ def build_tiers(models: list[dict]) -> list[dict]:
                       "price_from": bucket[0]["best"]["price"], "price_to": bucket[-1]["best"]["price"],
                       "candidates": sorted(top, key=lambda m: m["best"]["price"])})
     if len(tiers) == 1:
-        tiers[0].update(label="Opciones que cumplen", blurb="Encontramos pocas opciones: estas son las que mejor encajan.")
+        tiers[0].update(label="Opciones que cumplen", blurb="Son pocas entre las publicaciones que revisamos hoy; puede haber otras en tiendas que no leemos.")
     return tiers
 
 
@@ -257,16 +315,18 @@ def recommend(tiers: list[dict], level: str = "sin_definir") -> str | None:
     return max(pool, key=lambda m: (m["score"], -m["best"]["price"]))["model"]
 
 
-NEAR_MIN = 35
+NEAR_MIN = 25
 
 
-def near_misses(models: list[dict], n: int = 4) -> list[dict]:
+def near_misses(models: list[dict], n: int = 6) -> list[dict]:
     """Los que casi cumplen (les falta algo): se muestran aparte, con lo que les falta."""
     near = [m for m in models if NEAR_MIN <= m["score"] < MIN_SCORE]
-    return sorted(near, key=lambda m: (-m["score"], m["best"]["price"]))[:n]
+    # Primero las que se pueden completar (ampliando RAM o disco), después por puntaje y precio
+    return sorted(near, key=lambda m: (not m.get("fix"), -m["score"], m["best"]["price"]))[:n]
 
 
 CY_MODELS = 5    # modelos sugeridos que se buscan en ComparaYa por búsqueda
+CY_TRIES = 4     # en la búsqueda en vivo, pocas direcciones por modelo (el botón y el escaneo prueban más)
 CY_WORKERS = 3   # de a pocos: cada modelo prueba algunas direcciones con pausa
 
 
@@ -280,7 +340,8 @@ def comparaya_listings(models: list[str], profile: dict, store_listings: list[di
         seen_cpus = [c for c in (comparaya.cpu_of(x) for x in titles) if c]
         cpus = sorted(set(seen_cpus), key=lambda c: -seen_cpus.count(c))[:3]
         try:
-            r = comparaya.find(model, profile.get("product", ""), titles[0] if titles else "", cpus=cpus)
+            r = comparaya.find(model, profile.get("product", ""), titles[0] if titles else "", cpus=cpus,
+                               max_tries=CY_TRIES)
         except Exception as e:  # noqa: BLE001 — ComparaYa caído no corta la búsqueda
             log.info("ComparaYa %s: %s", model, e)
             return []
@@ -306,7 +367,20 @@ def comparaya_listings(models: list[str], profile: dict, store_listings: list[di
     return found, status
 
 
-def find(profile: dict) -> dict:
+AVAIL_WORKERS = 8
+
+
+def drop_unavailable(evaluated: list[dict], postal_code: str | None) -> tuple[list[dict], int]:
+    """Saca las publicaciones que no se pueden comprar en la zona (sólo las que se podrían mostrar:
+    puntaje de "casi cumple" para arriba). Devuelve (las que quedan, cuántas se sacaron)."""
+    check = [e for e in evaluated if e["score"] >= NEAR_MIN and e.get("vtex")]
+    with ThreadPoolExecutor(max_workers=AVAIL_WORKERS) as ex:
+        results = list(ex.map(lambda e: vtex_available(e, postal_code or "1000"), check))
+    gone = {id(e) for e, ok in zip(check, results) if ok is False}
+    return [e for e in evaluated if id(e) not in gone], len(gone)
+
+
+def find(profile: dict, postal_code: str | None = None) -> dict:
     reg = stores.load()
     shops = reg.for_categories([profile["category"]])
     if not shops:
@@ -320,17 +394,26 @@ def find(profile: dict) -> dict:
     pool = via_cy + pool[:max(0, settings.MAX_LISTINGS_TO_EVALUATE - len(via_cy))]
     report.stores.append(cy_status)
     evaluated = evaluate(pool, profile)
+    evaluated, unavailable = drop_unavailable(evaluated, postal_code)
     budget = profile.get("budget", {})
     models = group_by_model(evaluated, budget.get("max_ars"))
     tiers = build_tiers(models)
+    near = near_misses(models)
+    full = [c["best"]["price"] for t in tiers for c in t["candidates"]]
+    try:
+        upgrades.add_costs(near, min(full) if full else None)
+    except Exception as e:  # noqa: BLE001 — sin precios de piezas, igual se muestran
+        log.info("precios de piezas: %s", e)
     main_q = broad[0]
     return {
         "tiers": tiers,
-        "near": near_misses(models),
+        "near": near,
         "recommended": recommend(tiers, budget.get("level", "sin_definir")),
         "stores": sorted(report.stores, key=lambda s: (not s["ok"], -s["found"], s["name"])),
         "counts": {"found": len(report.listings), "evaluated": len(pool),
-                   "matching": sum(1 for m in models if m["score"] >= MIN_SCORE)},
+                   "matching": sum(1 for m in models if m["score"] >= MIN_SCORE),
+                   "unavailable": unavailable},
+        "postal_code": postal_code or None,
         "links": {
             # Mercado Libre devuelve poco con búsquedas amplias ("notebook gamer 32gb"): primero los
             # modelos (marca + modelo corto) y después una búsqueda amplia

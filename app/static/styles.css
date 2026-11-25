@@ -292,3 +292,15 @@ a { color: var(--accent); }
 .ml-result .cheaper { color: var(--accent); font-weight: 600; }
 .ml-result .muted { color: var(--muted); }
 .ml-result .small { font-size: 12px; }
+.cp-row { max-width: 860px; margin: 28px auto 0; display: grid; gap: 6px; justify-items: center; text-align: center; }
+.cp-row label { font-weight: 600; }
+.cp-row small { font-weight: 400; color: var(--muted); }
+.cp-row input { font: inherit; width: 160px; text-align: center; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.muted-note { color: var(--muted); font-size: 14px; }
+.upgrade { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--accent); font-size: 14px; display: grid; gap: 6px; }
+.upgrade ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.upgrade li { display: flex; justify-content: space-between; gap: 10px; }
+.upgrade li.total { font-weight: 700; border-top: 1px solid var(--border); padding-top: 4px; }
+.upgrade .cheaper { color: var(--accent); font-weight: 600; }
+.upgrade .muted { color: var(--muted); }
+.upgrade .small { font-size: 12px; }
