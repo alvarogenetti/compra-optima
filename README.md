@@ -38,12 +38,13 @@ Una búsqueda completa usa unas 10 consultas (entrevista + evaluación en tandas
 `GEMINI_MODEL` pone primero los **Flash Lite** y deja los Flash de respaldo. Si un modelo responde 429
 se saltea el tiempo que indica Google (retryDelay, o una hora si es el cupo diario); con 503, 30 s.
 
-**Varias IA gratis en cadena** (`core/ai.py`, `ChainAI`): además de Gemini, la app usa **Groq**,
-**Cerebras** y **OpenRouter** (API tipo OpenAI, `OpenAICompatAI`) si tienen clave (`GROQ_API_KEY`,
-`CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`). Se prueban en el orden de `AI_CHAIN` (por defecto gemini,
-groq, cerebras, openrouter): si una está sin cupo o falla, se usa la siguiente. Cada una tiene su lista
-de modelos (`GROQ_MODELS`, etc.) con la misma lógica de pausas. La insignia de arriba a la derecha
-muestra cuáles están activas.
+**Varias IA gratis en cadena** (`core/ai.py`, `ChainAI`): además de Gemini, la app usa **Groq** y
+**OpenRouter** (API tipo OpenAI, `OpenAICompatAI`) si tienen clave (`GROQ_API_KEY`,
+`OPENROUTER_API_KEY`). Se prueban en el orden de `AI_CHAIN` (por defecto gemini, groq, openrouter): si
+una está sin cupo o falla, se usa la siguiente. Cada una tiene su lista de modelos (`GROQ_MODELS`,
+`OPENROUTER_MODELS`) con la misma lógica de pausas. La insignia de arriba a la derecha muestra cuáles
+están activas. **Cerebras** también está soportada (`CEREBRAS_API_KEY`) pero fuera de la cadena por
+defecto: desde julio de 2026 ya no tiene plan gratis (prueba de $5 por 30 días y después pago por uso).
 
 El plan gratis de Gemini tiene límites por minuto y por día, y Google puede usar lo que se le manda
 para mejorar sus modelos. Para una prueba chica alcanza; antes de abrirlo a más gente, conviene

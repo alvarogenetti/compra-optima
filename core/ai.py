@@ -287,7 +287,7 @@ class ChainAI:
 
 
 def configured_providers(client: httpx.Client | None = None) -> list:
-    """Las IA con clave, en el orden de AI_CHAIN (por defecto gemini, groq, cerebras, openrouter)."""
+    """Las IA con clave, en el orden de AI_CHAIN (por defecto gemini, groq, openrouter)."""
     out = []
     for name in settings.ai_chain():
         if name == "gemini" and settings.gemini_key():

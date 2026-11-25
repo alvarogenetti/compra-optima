@@ -25,7 +25,7 @@ def ai_provider() -> str:
 
 def ai_chain() -> list[str]:
     """Orden en que se prueban las IA (sólo cuentan las que tienen clave)."""
-    raw = os.getenv("AI_CHAIN") or "gemini,groq,cerebras,openrouter"
+    raw = os.getenv("AI_CHAIN") or "gemini,groq,openrouter"
     return [x.strip().lower() for x in raw.split(",") if x.strip()]
 
 

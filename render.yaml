@@ -19,7 +19,7 @@ services:
       - key: GROQ_API_KEY
         sync: false        # opcional: otra IA gratis de respaldo (console.groq.com)
       - key: CEREBRAS_API_KEY
-        sync: false        # opcional: otra IA gratis de respaldo (cloud.cerebras.ai)
+        sync: false        # opcional: Cerebras ya no es gratis; sólo si se agrega a AI_CHAIN
       - key: OPENROUTER_API_KEY
         sync: false        # opcional: otra IA gratis de respaldo (openrouter.ai)
       - key: ACCESS_CODE
