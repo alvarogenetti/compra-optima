@@ -14,7 +14,7 @@ import hashlib
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import unicodedata
 
 from core import comparaya, settings, specs, stores, upgrades
@@ -228,11 +228,12 @@ def _cache_put(key: str, e: dict) -> None:
     _eval_cache[key] = (time.time(), {k: e[k] for k in _EVAL_FIELDS if k in e})
 
 
-def evaluate(listings: list[dict], profile: dict) -> list[dict]:
+def evaluate(listings: list[dict], profile: dict, progress=None) -> list[dict]:
     """Evalúa las publicaciones. Ahorra tokens de dos maneras:
     - CACHÉ (6 h): lo ya evaluado para este perfil no se vuelve a pedir (reintentos, cambio de código
       postal, segundo clic en "Buscar precios").
-    - Tandas en paralelo (respuestas más completas y más rápidas que un pedido gigante)."""
+    - Tandas en paralelo (respuestas más completas y más rápidas que un pedido gigante).
+    `progress(hechas, total)` se llama cada vez que termina una tanda (para mostrar el avance)."""
     if not listings:
         return []
     cached, todo = [], []
@@ -248,17 +249,23 @@ def evaluate(listings: list[dict], profile: dict) -> list[dict]:
         return cached
     batches = [todo[i:i + EVAL_BATCH] for i in range(0, len(todo), EVAL_BATCH)]
     rejected: list[dict] = []
+    if progress:
+        progress(0, len(batches))
     if len(batches) == 1:
         fresh = evaluate_batch(batches[0], profile, rejected=rejected)
+        if progress:
+            progress(1, 1)
     else:
         fresh, errors = [], []
         with ThreadPoolExecutor(max_workers=EVAL_PARALLEL) as ex:
             futures = [ex.submit(evaluate_batch, b, profile, True, rejected) for b in batches]
-            for f in futures:
+            for done, f in enumerate(as_completed(futures), 1):
                 try:
                     fresh += f.result()
                 except AIError as e:   # una tanda que falla no tira las demás
                     errors.append(e)
+                if progress:
+                    progress(done, len(batches))
         if errors and not fresh and not cached:
             raise errors[0]
     for e in fresh:
@@ -488,7 +495,11 @@ def comparaya_listings(models: list[str], profile: dict, store_listings: list[di
 
 
 def title_key(title: str) -> str:
-    return " ".join(sorted(_tokens(title)))
+    """Identifica "la misma publicación" (para deduplicar y para la caché). Cuenta también los números de un
+    dígito ("Ryzen 7" vs "Ryzen 5"), que `_tokens` descarta por cortos: si no, dos configuraciones distintas
+    se confundirían."""
+    singles = set(re.findall(r"(?<![a-z0-9])\d(?![a-z0-9])", _fold(title)))
+    return " ".join(sorted(_tokens(title) | singles))
 
 
 def add_siblings(evaluated: list[dict], listings: list[dict]) -> list[dict]:
@@ -542,11 +553,25 @@ def drop_unavailable(evaluated: list[dict], postal_code: str | None) -> tuple[li
     return [e for e in evaluated if id(e) not in gone], len(gone)
 
 
-def find(profile: dict, postal_code: str | None = None) -> dict:
+# Pasos de una búsqueda, en orden, tal como los ve la persona (clave, texto). La página los muestra con su
+# avance; `find(progress=...)` avisa en cuál va. Si se agrega un paso, se agrega acá y en find().
+STAGES = [
+    ("stores", "Buscando en las tiendas"),
+    ("marketplaces", "Revisando Mercado Libre y otras tiendas"),
+    ("evaluate", "Evaluando las publicaciones contra tu perfil"),
+    ("availability", "Verificando qué se puede comprar en tu zona"),
+    ("tiers", "Armando tus opciones"),
+]
+
+
+def find(profile: dict, postal_code: str | None = None, progress=None) -> dict:
+    """La búsqueda completa. `progress(paso, detalle)` avisa en qué paso va (ver STAGES)."""
+    step = progress or (lambda stage, detail="": None)
     reg = stores.load()
     shops = reg.for_categories([profile["category"]])
     if not shops:
         raise AIError("Todavía no tenemos tiendas para esa categoría.")
+    step("stores", f"{len(shops)} tiendas")
     broad = profile["search_queries"]
     models_q = [m for m in profile.get("suggested_models", []) if m.lower() not in {q.lower() for q in broad}]
     # Búsquedas por especificación dura ("notebook rtx 4050", "notebook rtx 4060"...): traen publicaciones
@@ -555,13 +580,19 @@ def find(profile: dict, postal_code: str | None = None) -> dict:
     cap = profile.get("budget", {}).get("max_ars")
     report = search_all(shops, broad + spec_q + models_q, profile.get("exclude_words"),
                         price_range=(1000, cap * 1.3) if cap else None, deep=set(spec_q))
+    step("marketplaces", f"{len(report.listings)} publicaciones encontradas")
     via_cy, cy_status = comparaya_listings(models_q, profile, report.listings)
     pool = prefilter(report.listings, profile, broad + spec_q, models_q)
     # Las de ComparaYa (Mercado Libre y tiendas que no leemos) se evalúan siempre
     pool = via_cy + pool[:max(0, settings.MAX_LISTINGS_TO_EVALUATE - len(via_cy))]
     report.stores.append(cy_status)
-    evaluated = add_siblings(evaluate(pool, profile), report.listings)
+    step("evaluate", f"{len(pool)} publicaciones")
+    evaluated = add_siblings(
+        evaluate(pool, profile, lambda done, total: step("evaluate", f"{len(pool)} publicaciones · tanda {done} de {total}")),
+        report.listings)
+    step("availability", "")
     evaluated, unavailable = drop_unavailable(evaluated, postal_code)
+    step("tiers", "")
     budget = profile.get("budget", {})
     models = group_by_model(evaluated, budget.get("max_ars"))
     tiers = build_tiers(models)

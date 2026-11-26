@@ -2,7 +2,8 @@
 
   GET  /api/status            proveedor de IA, tiendas, categorías y si se puede seguir precios
   POST /api/interview         un turno de la entrevista  {conversation: [...], finish: bool}
-  POST /api/candidates        busca y evalúa candidatos  {profile: {...}}
+  POST /api/candidates        arranca la búsqueda en segundo plano  {profile, postal_code} → {job_id}
+  GET  /api/candidates/<id>   avance de la búsqueda (paso, tiempo) y, al terminar, el resultado
   POST /api/follow            "Seguir precio": crea el seguimiento y devuelve el link de Telegram
   POST /api/telegram/<clave>  webhook del bot (lo llama Telegram)
   POST /api/feedback          "¿Te sirvió?"
@@ -20,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core import (candidates, comparaya, db, feedback, follow, guard, interview, search, settings, stores,
+from core import (candidates, comparaya, db, feedback, follow, guard, interview, jobs, search, settings, stores,
                   telegram, usage)
 from core.ai import AIError
 
@@ -131,8 +132,26 @@ def do_interview(body: InterviewIn, request: Request):
 
 @app.post("/api/candidates")
 def do_candidates(body: CandidatesIn, request: Request):
+    """Arranca la búsqueda en segundo plano y contesta enseguida con el id; el avance y el resultado se piden
+    con GET /api/candidates/<id> (core/jobs.py)."""
     protect(request, "search", settings.LIMIT_SEARCH_PER_HOUR)
-    return candidates.find(interview.normalize_profile(body.profile), body.postal_code)
+    profile = interview.normalize_profile(body.profile)
+    try:
+        job = jobs.manager.start(lambda progress: candidates.find(profile, body.postal_code, progress))
+    except jobs.Busy as e:
+        return JSONResponse(status_code=429, content={"error": str(e)})
+    return {"job_id": job.id, "stages": [{"key": k, "label": label} for k, label in candidates.STAGES]}
+
+
+@app.get("/api/candidates/{job_id}")
+def candidates_status(job_id: str, request: Request):
+    """Estado de una búsqueda: paso actual, pasos ya iniciados, tiempo y, al terminar, el resultado o el error."""
+    guard.check_code(request.headers.get("x-access-code"))
+    job = jobs.manager.get(job_id)
+    if not job:
+        return JSONResponse(status_code=404, content={
+            "error": "Esa búsqueda ya no está (el servidor se reinició o pasó mucho tiempo). Probá de nuevo.", "gone": True})
+    return job.snapshot()
 
 
 class Offer(BaseModel):

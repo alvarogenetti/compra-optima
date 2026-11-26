@@ -34,7 +34,19 @@ sobre el uso. Después devuelve el **perfil**:
 
 ## 2. Búsqueda en las tiendas
 
-`candidates.find()` → `search.search_all()`.
+`candidates.find()` → `search.search_all()`. **Corre en segundo plano** (`core/jobs.py`, hasta 3 a la vez) y
+avisa en qué paso va con `progress(paso, detalle)`; la página lo muestra:
+
+| Paso (`candidates.STAGES`) | Lo que ve la persona |
+|---|---|
+| `stores` | Buscando en las tiendas · *21 tiendas* |
+| `marketplaces` | Revisando Mercado Libre y otras tiendas · *N publicaciones encontradas* |
+| `evaluate` | Evaluando las publicaciones contra tu perfil · *150 publicaciones · tanda 2 de 5* |
+| `availability` | Verificando qué se puede comprar en tu zona |
+| `tiers` | Armando tus opciones |
+
+Un paso nuevo se agrega a `STAGES` y a `find()` (el test `test_find_reporta_cada_paso_en_orden` verifica que
+cada paso se avise, en orden).
 
 - **Qué se busca:** `search_queries` + `spec_queries` + `suggested_models`, en cada tienda de la categoría,
   en paralelo (16 hilos). Cada tienda se lee con el buscador público de su plataforma (VTEX, WooCommerce,

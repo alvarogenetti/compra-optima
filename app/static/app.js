@@ -91,7 +91,11 @@ async function api(path, body, code = getCode()) {
     setCode("");
     showCode();
   }
-  if (!r.ok) throw new Error((data && (data.error || (data.detail && JSON.stringify(data.detail)))) || `Error ${r.status}`);
+  if (!r.ok) {
+    const err = new Error((data && (data.error || (data.detail && JSON.stringify(data.detail)))) || `Error ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
   return data;
 }
 
@@ -307,13 +311,28 @@ async function search() {
   if (busy || !state.profile) return;
   busy = true;
   show("results");
-  $("#results").innerHTML = `<div class="loading"><div class="spinner"></div>
-    <p><b>Buscando ${esc(state.profile.product.toLowerCase())} en las tiendas…</b></p>
-    <p>Consultamos precios reales y después evaluamos cada publicación contra tu perfil. Puede tardar hasta un minuto.</p></div>`;
+  renderSearchProgress(null, null);
   try {
     const cp = ($("#cp-input").value || "").trim().toUpperCase();
     if (cp) { try { localStorage.setItem("compra-optima:cp", cp); } catch (_) { /* nada */ } }
-    state.results = await api("/api/candidates", { profile: state.profile, postal_code: /^[A-Z]?\d{4}[A-Z]{0,3}$/.test(cp) ? cp : null });
+    // La búsqueda corre en el servidor en segundo plano (core/jobs.py): se arranca y se pregunta cómo viene
+    const job = await api("/api/candidates", { profile: state.profile, postal_code: /^[A-Z]?\d{4}[A-Z]{0,3}$/.test(cp) ? cp : null });
+    let failures = 0;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      let snap;
+      try { snap = await api(`/api/candidates/${job.job_id}`); failures = 0; }
+      catch (e) {
+        // Un corte de red no tira la búsqueda: se reintenta unas veces. Un 404 (el servidor se reinició) o un
+        // 401 (código de acceso) no se arreglan reintentando.
+        if (e.status === 404 || e.status === 401 || ++failures >= 4) throw e;
+        continue;
+      }
+      if (snap.status === "running") { renderSearchProgress(job.stages, snap); continue; }
+      if (snap.status === "error") throw new Error(snap.error);
+      state.results = snap.result;
+      break;
+    }
     state.searchedAt = Date.now();
     state.feedbackSent = false;
     saveToHistory();
@@ -325,6 +344,26 @@ async function search() {
   } finally {
     busy = false;
   }
+}
+
+/* Avance real de la búsqueda: los pasos vienen del servidor (candidates.STAGES) y se marca en cuál va */
+function renderSearchProgress(stages, snap) {
+  const el = $("#results");
+  const product = esc(state.profile.product.toLowerCase());
+  if (!stages || !snap) {
+    el.innerHTML = `<div class="progress-card"><div class="spinner"></div><h2>Buscando ${product}…</h2>
+      <p class="muted-note">Arrancando la búsqueda.</p></div>`;
+    return;
+  }
+  const at = Math.max(0, stages.findIndex((s) => s.key === snap.stage));
+  const items = stages.map((s, i) => {
+    const cls = i < at ? "done" : i === at ? "current" : "todo";
+    const detail = i === at && snap.detail ? ` <small>${esc(snap.detail)}</small>` : "";
+    return `<li class="${cls}"><span class="mark" aria-hidden="true">${cls === "done" ? "✓" : ""}</span><span>${esc(s.label)}${detail}</span></li>`;
+  }).join("");
+  const m = Math.floor(snap.elapsed_s / 60), s = snap.elapsed_s % 60;
+  el.innerHTML = `<div class="progress-card"><h2>Buscando ${product}…</h2><ol class="stages" aria-live="polite">${items}</ol>
+    <p class="muted-note">Van ${m ? `${m} min ` : ""}${s} s. Suele tardar entre 40 segundos y 2 minutos; si la IA está lenta, un poco más.</p></div>`;
 }
 
 /* "Búsqueda del 25/11 18:50 · hace 3 h": las guardadas muestran precios de ese momento */

@@ -23,7 +23,7 @@ Este documento es el mapa. El detalle de cada parte está en [`docs/`](README.md
                                         │  JSON
                                         ▼
         ┌─────────────────────  FastAPI (app/main.py)  ──────────────────────┐
-        │  /api/interview   /api/candidates   /api/ml   /api/follow           │
+        │  /api/interview   /api/candidates[/id]   /api/ml   /api/follow      │
         │  /api/feedback    /api/usage        /api/telegram/<clave>           │
         │  guard.py: código de acceso + límite por persona                    │
         └───────┬──────────────┬──────────────────┬──────────────┬────────────┘
@@ -55,7 +55,11 @@ Dos procesos separados que comparten una base:
    prompt (corto o completo) y la tarea (`interview` o `profile`), `ai.py` elige IA, y la respuesta se
    valida (`normalize`). Se repite hasta que la IA devuelve `type: "profile"` (mínimo 3 preguntas, máximo
    10).
-2. **Búsqueda.** `POST /api/candidates` con el perfil y el código postal (`candidates.find`):
+2. **Búsqueda.** `POST /api/candidates` con el perfil y el código postal arranca la búsqueda **en segundo
+   plano** (`core/jobs.py`) y contesta enseguida con un `job_id`; la página pregunta cada 1,5 s a
+   `GET /api/candidates/<id>` y muestra el paso actual (`candidates.STAGES`: tiendas → Mercado Libre y otras →
+   evaluación, con "tanda 2 de 5" → disponibilidad → armado) y el tiempo, hasta que llega el resultado o el
+   error. Qué hace `candidates.find`:
    1. Tiendas de la categoría (`stores.for_categories`), salteando las `cloud_blocked` si se corre en la
       nube.
    2. `search_all`: búsquedas amplias + por especificación dura + modelos sugeridos, en paralelo (16 hilos),
@@ -87,6 +91,7 @@ Dos procesos separados que comparten una base:
 | `core/search.py` | Lectores de VTEX/WooCommerce/Tiendanube, disponibilidad, especificaciones de ficha | [STORES.md](STORES.md) |
 | `core/comparaya.py` | Mercado Libre vía fichas públicas de ComparaYa | [STORES.md](STORES.md) |
 | `core/candidates.py` | Prefiltro, evaluación, caché, rangos, recomendación | [SEARCH.md](SEARCH.md) |
+| `core/jobs.py` | Búsqueda en segundo plano con progreso (hasta 3 a la vez) | este (§2) y [SEARCH.md](SEARCH.md) |
 | `core/upgrades.py` | Precio de módulos de RAM y SSD para completar una notebook | [SEARCH.md](SEARCH.md) |
 | `core/specs.py` | Ficha del fabricante con Gemini + Google | [SEARCH.md](SEARCH.md) |
 | `core/follow.py`, `core/telegram.py` | Seguir precio y bot | [FOLLOW.md](FOLLOW.md) |
@@ -114,8 +119,9 @@ esquema está en `core/db.py` y se crea solo al arrancar (`meta.create_all`).
 Datos personales: sólo el `chat_id` de Telegram y el nombre que Telegram da. No hay cuentas ni
 contraseñas. Los comentarios de "¿Te sirvió?" no se guardan: llegan por Telegram al dueño.
 
-Caches **en memoria** (se pierden al reiniciar, son recomputables): evaluaciones (`candidates._eval_cache`),
-pausas de modelos de IA (`ai._cooldown`), fichas ya vistas (`specs._memory`).
+Caches y estado **en memoria** (se pierden al reiniciar, son recomputables): evaluaciones
+(`candidates._eval_cache`), pausas de modelos de IA (`ai._cooldown`), fichas ya vistas (`specs._memory`) y las
+búsquedas en curso o recién terminadas (`jobs.manager`, 30 minutos).
 
 **Estado en el navegador** (`app/static/app.js`, `localStorage`): el servidor no guarda nada de la sesión.
 - La página **siempre abre en el inicio**; lo que se está haciendo vive en memoria.
@@ -175,6 +181,8 @@ Dos clases, separadas a propósito:
 | Gemini 429 (cuota) | esa IA/modelo no responde | se pausa el tiempo indicado; el pedido pasa al siguiente modelo y luego a otra IA |
 | Gemini 503 / timeout | respuestas lentas o ausentes | reintento corto, siguiente modelo, salud baja → pasa al final del orden |
 | Todas las IA sin cuota | la búsqueda o la pregunta no se puede responder | mensaje claro con en cuánto reintentar; la caché de evaluaciones evita repetir lo ya hecho |
+| Servidor reiniciado a mitad de una búsqueda | el trabajo en segundo plano desaparece | el sondeo recibe 404 y la página lo dice ("Esa búsqueda ya no está… probá de nuevo"); la caché de evaluaciones se perdió, así que repite el trabajo |
+| Demasiadas búsquedas a la vez (más de 3) | cada una gasta cuota de IA y consulta decenas de tiendas | el `POST` responde 429 "Hay varias búsquedas en curso…" |
 | Respuesta de IA incompleta o inválida | se perderían candidatos | `product:false` explícito + reintento de lo faltante; JSON rescatado de texto sucio |
 | Tienda bloquea (403) | menos resultados | se informa en "Dónde buscamos"; las `cloud_blocked` ni se consultan desde la nube |
 | Publicación sin stock en la zona | recomendar algo que no se puede comprar | simulación de compra de VTEX con el código postal |

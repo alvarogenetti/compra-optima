@@ -317,3 +317,17 @@ a { color: var(--accent); }
 .history-del { color: var(--muted); flex: none; }
 .history .muted-note { margin-top: 8px; font-size: 12px; }
 .age-note { margin-top: 4px; }
+
+/* Progreso de la búsqueda */
+.progress-card { max-width: 520px; margin: 56px auto; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); text-align: left; }
+.progress-card h2 { font-size: 22px; margin-bottom: 16px; }
+.progress-card .spinner { margin: 0 0 16px; }
+.stages { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 12px; }
+.stages li { display: flex; align-items: flex-start; gap: 12px; color: var(--muted); }
+.stages .mark { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); display: grid; place-items: center; font-size: 13px; font-weight: 700; margin-top: 1px; }
+.stages small { display: block; color: var(--muted); font-size: 13px; }
+.stages li.done { color: var(--text); }
+.stages li.done .mark { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.stages li.current { color: var(--text); font-weight: 600; }
+.stages li.current .mark { border-color: var(--accent); border-top-color: transparent; animation: spin 1s linear infinite; }
+.stages li.current small { font-weight: 400; }

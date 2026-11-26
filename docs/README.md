@@ -12,6 +12,7 @@ cómo funciona, por qué está hecho así, cómo operarlo y cómo cambiarlo sin 
 | [FOLLOW.md](FOLLOW.md) | Seguir precio: Telegram, escaneo programado y qué es "bajar de verdad" |
 | [OPERATIONS.md](OPERATIONS.md) | Variables de entorno, despliegue, monitoreo y **runbook** de fallas |
 | [DECISIONS.md](DECISIONS.md) | Registro de decisiones de arquitectura (el porqué de cada elección) |
+| [PRUEBAS.md](PRUEBAS.md) | **Plan de pruebas manuales:** casos, qué escribir, qué debería mostrar y señales de problema |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Cómo trabajar en el proyecto: convenciones, tests, documentación |
 | [../CLAUDE.md](../CLAUDE.md) | Instrucciones para las sesiones de Claude Code que trabajan en el repo |
 
@@ -32,3 +33,4 @@ tienda, de límite o de configuración sin su documento es un cambio incompleto.
 | una variable, un secret o el despliegue | [OPERATIONS.md](OPERATIONS.md) |
 | algo que condiciona el diseño o revierte una decisión | [DECISIONS.md](DECISIONS.md) (nuevo ADR) |
 | un módulo, una tabla o un endpoint | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| un flujo o una pantalla que ve la persona | [PRUEBAS.md](PRUEBAS.md) (el caso de prueba que lo cubre) |

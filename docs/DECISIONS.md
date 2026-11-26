@@ -129,3 +129,16 @@ costo de servidor ni de base. Una entrevista a medias no se guarda: recargar la 
 **Consecuencias.** Menos arranques en frío, pero de mejor esfuerzo (GitHub demora el cron). Gasta ~744 de las
 750 horas gratis mensuales de Render, compartidas por todos los servicios gratis de la cuenta. Es una
 decisión **reversible** borrando el workflow. La alternativa de fondo es un plan pago de Render.
+
+### ADR-017 · La búsqueda corre en segundo plano y la página consulta el avance — *vigente* (26/11/2026)
+**Contexto.** Una búsqueda completa tarda de 40 segundos a 3 minutos (tiendas + evaluación con IA, con Gemini
+inestable). Hacerla en un solo pedido HTTP dejaba a la persona mirando una ruedita sin saber qué pasaba, y un pedido
+tan largo es frágil (proxies con límite de tiempo; no se verificó el de Render).
+**Decisión.** `POST /api/candidates` arranca la búsqueda en un hilo (`core/jobs.py`) y contesta con un `job_id`;
+la página pregunta cada 1,5 s a `GET /api/candidates/<id>`, que devuelve el paso actual (`candidates.STAGES`), el
+detalle ("tanda 2 de 5") y el tiempo, y al final el resultado o el error. Máximo 3 búsquedas a la vez (429 si no).
+**Descartado.** Una barra de progreso inventada (con tiempos fijos): se muestran pasos reales. *Server-sent
+events* o *WebSockets*: más piezas que sostener que un sondeo cada 1,5 s para esta escala.
+**Consecuencias.** No acorta la espera, pero la hace entendible. Los trabajos viven en memoria: un reinicio
+a mitad de una búsqueda la pierde y la página lo avisa. Con más de una instancia del servidor habría que
+mover los trabajos a la base (hoy Render corre una).

@@ -49,6 +49,7 @@ Todo está documentado en [`docs/`](docs/README.md). Empezá por la arquitectura
 | [FOLLOW.md](docs/FOLLOW.md) | Seguir precio, Telegram y escaneo programado |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Variables, despliegue, monitoreo, runbook |
 | [DECISIONS.md](docs/DECISIONS.md) | Registro de decisiones de arquitectura |
+| [PRUEBAS.md](docs/PRUEBAS.md) | Plan de pruebas manuales: qué probar y qué debería mostrar |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Cómo trabajar: convenciones, tests, documentación |
 
 ## Límites conocidos

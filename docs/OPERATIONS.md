@@ -104,7 +104,9 @@ arrancar, la web registra el webhook en `RENDER_EXTERNAL_URL`. No usar el bot de
 |---|---|---|
 | "Llegamos al límite gratis de la IA" | cupo de Gemini agotado (por minuto o por día) | `/api/usage` para ver cuál; esperar (el diario se reinicia ~5 AM Argentina); verificar que Groq/OpenRouter tengan clave; evaluar facturación |
 | "La IA de Google está saturada" | 503 de Gemini (frecuente en el plan gratis) | la cadena pasa a Groq sola; si persiste, mirar `usage.health` en `/api/usage` |
-| La búsqueda tarda más de 2 min | Gemini inestable o tandas que fallan y se reintentan | normal con 503 repetidos; ver `/api/usage` (consultas fallidas y duración) |
+| La búsqueda tarda más de 2 min | Gemini inestable o tandas que fallan y se reintentan | normal con 503 repetidos; la página muestra en qué paso está; ver `/api/usage` (consultas fallidas y duración) |
+| "Esa búsqueda ya no está…" | el servidor se reinició (deploy, o Render durmió y despertó) a mitad de la búsqueda | reintentar; la 2ª vez es más rápida por la caché de evaluaciones |
+| "Hay varias búsquedas en curso" (429) | ya corren 3 a la vez (`jobs.MAX_RUNNING`) | esperar un minuto; si pasa seguido con pocos usuarios, mirar si hay búsquedas colgadas en los logs (`jobs`) |
 | "Seguir precio" aparece gris | falta `COMPRA_BOT_TOKEN` o base (`follow_enabled: false` en `/api/status`) | cargar las variables en Render |
 | El bot no responde al `/start` | webhook no registrado | mirar logs de arranque (`No se pudo registrar el webhook`); verificar `RENDER_EXTERNAL_URL` y el token; redeploy |
 | Llegan avisos que no son bajas | publicación distinta del mismo modelo | ver [FOLLOW.md §3](FOLLOW.md#3-qué-es-bajar-de-verdad) (primer escaneo fija la partida) |
